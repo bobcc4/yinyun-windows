@@ -2,7 +2,7 @@
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { compareVersions, normalizeVersion, parseLatestRelease } = require('../electron/update.cjs')
+const { compareVersions, isReleaseUrl, normalizeVersion, parseLatestRelease } = require('../electron/update.cjs')
 
 test('normalizes and compares release versions', () => {
   assert.equal(normalizeVersion('v1.0.0'), '1.0.0')
@@ -25,4 +25,11 @@ test('accepts only stable releases from the client repository', () => {
     draft: false,
     prerelease: false,
   }), null)
+})
+
+test('accepts only validated client release links for external navigation', () => {
+  assert.equal(isReleaseUrl('https://github.com/bobcc4/yinyun-windows/releases/tag/v1.0.2'), true)
+  assert.equal(isReleaseUrl('https://github.com/bobcc4/yinyun-windows/releases/download/v1.0.2/client.exe'), true)
+  assert.equal(isReleaseUrl('https://github.com/bobcc4/yinyun-lxserver/releases/tag/v1.3.3'), false)
+  assert.equal(isReleaseUrl('https://github.com.example/bobcc4/yinyun-windows/releases/tag/v1.0.2'), false)
 })

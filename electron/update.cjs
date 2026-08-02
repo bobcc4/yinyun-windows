@@ -30,4 +30,13 @@ function parseLatestRelease(value) {
   return { version, url }
 }
 
-module.exports = { compareVersions, LATEST_RELEASE_API, normalizeVersion, parseLatestRelease }
+function isReleaseUrl(value) {
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && url.hostname === 'github.com' && url.pathname.startsWith('/bobcc4/yinyun-windows/releases/')
+  } catch {
+    return false
+  }
+}
+
+module.exports = { compareVersions, isReleaseUrl, LATEST_RELEASE_API, normalizeVersion, parseLatestRelease }

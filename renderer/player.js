@@ -1,6 +1,7 @@
 'use strict'
 
 const api = window.yinyunClient
+const { createFavoriteIndex, favoriteTrackId, rawTrack, trackId } = window.yinyunTrackIdentity
 const byId = id => document.getElementById(id)
 const elements = {
   playlistNav: byId('playlist-nav'), createPlaylist: byId('create-playlist'),
@@ -15,19 +16,21 @@ const elements = {
   relatedAlbums: byId('related-albums'), relatedAlbumCount: byId('related-album-count'), relatedAlbumList: byId('related-album-list'),
   empty: byId('empty-state'), loading: byId('loading-state'), about: byId('about-view'),
   accountName: byId('account-name'), connectionDot: byId('connection-dot'), syncCenter: byId('sync-center'),
-  aboutVersion: byId('about-version'), aboutAccount: byId('about-account'), aboutServer: byId('about-server'), aboutDownloadDirectory: byId('about-download-directory'),
+  aboutVersion: byId('about-version'), aboutUpdate: byId('about-update'), aboutAccount: byId('about-account'), aboutServer: byId('about-server'), aboutDownloadDirectory: byId('about-download-directory'),
   audio: byId('audio'), nowCover: byId('now-cover'), nowTitle: byId('now-title'), nowArtist: byId('now-artist'), favoriteCurrent: byId('favorite-current'),
-  previous: byId('previous'), playPause: byId('play-pause'), next: byId('next'), playMode: byId('play-mode'), progress: byId('progress'), elapsed: byId('elapsed'), duration: byId('duration'), volume: byId('volume'), quality: byId('quality'), downloadDirectory: byId('download-directory'), queueToggle: byId('queue-toggle'), lyricsToggle: byId('lyrics-toggle'),
-  detail: byId('detail-panel'), closeDetail: byId('close-detail'), detailTabs: [...document.querySelectorAll('.detail-tab')], queuePanel: byId('queue-panel'), lyricsPanel: byId('lyrics-panel'), queueCount: byId('queue-count'), clearQueue: byId('clear-queue'), queueList: byId('queue-list'), lyricsContent: byId('lyrics-content'),
+  previous: byId('previous'), playPause: byId('play-pause'), next: byId('next'), playMode: byId('play-mode'), progress: byId('progress'), elapsed: byId('elapsed'), duration: byId('duration'), volume: byId('volume'), quality: byId('quality'), downloadDirectory: byId('download-directory'), queueToggle: byId('queue-toggle'),
+  detail: byId('detail-panel'), closeDetail: byId('close-detail'), queueCount: byId('queue-count'), clearQueue: byId('clear-queue'), queueList: byId('queue-list'),
+  lyricsView: byId('lyrics-view'), closeLyrics: byId('close-lyrics'), lyricsBackdrop: byId('lyrics-backdrop'), lyricsCover: byId('lyrics-cover'), lyricsTitle: byId('lyrics-title'), lyricsArtist: byId('lyrics-artist'), lyricsContent: byId('lyrics-content'),
   playlistMenu: byId('playlist-menu'), toast: byId('toast'),
 }
 
 const state = {
   app: null, view: 'playlist', playlistId: 'love', playlists: [], tracks: [], entities: [],
   queue: readQueue(), queueIndex: -1, current: null, searchSource: 'tx', searchType: 'song',
-  loading: false, playMode: localStorage.getItem('yinyun-player-mode') || 'list', loveIds: new Set(),
+  loading: false, playMode: localStorage.getItem('yinyun-player-mode') || 'list', loveIndex: new Map(),
   libraries: { artists: [], albums: [] }, libraryType: 'artists', boardSource: 'tx', boards: [],
   resolving: false, toastTimer: null, downloads: new Map(), boardId: null, entityDetail: null, detailHistory: [],
+  lyrics: [], activeLyricIndex: -1, lyricsRequestId: 0,
 }
 
 function readQueue() {
@@ -37,16 +40,6 @@ function readQueue() {
   } catch { return [] }
 }
 function saveQueue() { localStorage.setItem('yinyun-player-queue', JSON.stringify(state.queue)) }
-function rawTrack(value) { return value?.raw || value }
-function trackId(value) {
-  const track = rawTrack(value) || {}
-  const source = String(track.source || value?.source || '')
-  const candidates = [track.id, value?.id, track.songmid, track.hash]
-  const existing = candidates.find(item => typeof item === 'string' && source && item.startsWith(`${source}_`))
-  if (existing) return existing
-  const platformId = candidates.find(item => item !== undefined && item !== null && String(item))
-  return platformId && source ? `${source}_${platformId}` : String(platformId || `${source}:${track.name || value?.title || ''}:${track.singer || value?.artist || ''}`)
-}
 function playlistTrack(value) { return { ...rawTrack(value), id: trackId(value) } }
 function normalizeTrack(value) {
   const raw = rawTrack(value) || {}
@@ -113,8 +106,10 @@ function renderPlaylists() {
   }); replaceIcons()
 }
 async function refreshPlaylists() {
-  state.playlists = await api.getPlaylists(); renderPlaylists(); const love = await api.getPlaylist('love'); state.loveIds = new Set((love.items || []).map(trackId)); renderCurrentFavorite()
+  state.playlists = await api.getPlaylists(); renderPlaylists(); const love = await api.getPlaylist('love'); setFavoriteTracks(love.items || []); renderCurrentFavorite()
 }
+function setFavoriteTracks(items) { state.loveIndex = createFavoriteIndex(items) }
+function isFavorite(track) { return Boolean(favoriteTrackId(track, state.loveIndex)) }
 async function refreshLibraries() {
   const [artists, albums] = await Promise.all([api.getLibrary('artists'), api.getLibrary('albums')]); state.libraries = { artists: Array.isArray(artists) ? artists : [], albums: Array.isArray(albums) ? albums : [] }
 }
@@ -135,7 +130,7 @@ function renderTrackList() {
     const track = normalizeTrack(sourceTrack); const row = document.createElement('div'); row.className = `track-row${state.current && trackId(state.current) === trackId(track) ? ' playing' : ''}`
     row.addEventListener('dblclick', event => { if (!event.target.closest('button')) playFromTracks(sourceTrack) })
     const main = document.createElement('div'); main.className = 'track-main'; main.title = '双击播放'; const cover = document.createElement('div'); renderCover(cover, track.artworkUrl); const copy = document.createElement('div'); copy.className = 'track-copy'; copy.append(Object.assign(document.createElement('strong'), { textContent: track.title }), Object.assign(document.createElement('span'), { textContent: track.artist })); main.append(cover, copy)
-    const actions = document.createElement('div'); actions.className = 'track-actions'; const play = makeIconButton('play', '播放'); const favorite = makeIconButton('heart', state.loveIds.has(trackId(track)) ? '取消收藏' : '收藏'); favorite.classList.toggle('active', state.loveIds.has(trackId(track))); const download = makeIconButton(state.downloads.has(trackId(track)) ? 'loader-circle' : 'download', state.downloads.has(trackId(track)) ? '正在下载' : '下载到 Windows'); download.classList.toggle('download-active', state.downloads.has(trackId(track))); download.disabled = state.downloads.has(trackId(track)); const add = makeIconButton('list-plus', '加入歌单')
+    const loved = isFavorite(sourceTrack); const actions = document.createElement('div'); actions.className = 'track-actions'; const play = makeIconButton('play', '播放'); const favorite = makeIconButton('heart', loved ? '取消收藏' : '收藏'); favorite.classList.toggle('active', loved); const download = makeIconButton(state.downloads.has(trackId(track)) ? 'loader-circle' : 'download', state.downloads.has(trackId(track)) ? '正在下载' : '下载到 Windows'); download.classList.toggle('download-active', state.downloads.has(trackId(track))); download.disabled = state.downloads.has(trackId(track)); const add = makeIconButton('list-plus', '加入歌单')
     play.addEventListener('click', () => playFromTracks(sourceTrack)); favorite.addEventListener('click', () => void toggleFavorite(sourceTrack)); download.addEventListener('click', () => void downloadTrack(sourceTrack)); add.addEventListener('click', event => showPlaylistMenu(event.currentTarget, sourceTrack)); actions.append(play, favorite, download, add)
     if (state.view === 'playlist' && !['love'].includes(state.playlistId)) { const remove = makeIconButton('x', '从歌单移除'); remove.addEventListener('click', () => void removeFromCurrentPlaylist(sourceTrack)); actions.append(remove) }
     row.append(main, Object.assign(document.createElement('span'), { className: 'track-album', textContent: track.album || '-' }), Object.assign(document.createElement('span'), { className: 'track-source', textContent: track.source.toUpperCase() }), Object.assign(document.createElement('span'), { className: 'track-duration', textContent: formatTime(track.duration) }), actions); elements.trackList.append(row)
@@ -144,7 +139,7 @@ function renderTrackList() {
 }
 async function openPlaylist(id) {
   state.detailHistory = []; resetEntityDetailView(); state.view = 'playlist'; state.playlistId = id; state.boardId = null; setActiveNavigation('data-playlist', id); showMode('playlist'); elements.playlistActions.classList.toggle('hidden', ['love', 'default'].includes(id)); const summary = state.playlists.find(item => item.id === id); elements.title.textContent = summary?.name || (id === 'love' ? '我喜欢的音乐' : '歌单'); setLoading(true)
-  try { const playlist = await api.getPlaylist(id); state.tracks = playlist.items || []; elements.title.textContent = playlist.name; elements.subtitle.textContent = `${state.tracks.length} 首歌曲`; if (id === 'love') state.loveIds = new Set(state.tracks.map(trackId)); renderTrackList() } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
+  try { const playlist = await api.getPlaylist(id); state.tracks = playlist.items || []; elements.title.textContent = playlist.name; elements.subtitle.textContent = `${state.tracks.length} 首歌曲`; if (id === 'love') setFavoriteTracks(state.tracks); renderTrackList() } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
 }
 function openSearch() {
   state.detailHistory = []; resetEntityDetailView(); state.view = 'search'; state.playlistId = ''; state.tracks = []; state.entities = []; setActiveNavigation('data-view', 'search'); showMode('search'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '搜索'; elements.subtitle.textContent = '搜索在线曲库'; elements.trackList.replaceChildren(); elements.entityList.replaceChildren(); elements.empty.classList.remove('hidden'); elements.searchInput.focus()
@@ -263,17 +258,63 @@ async function playAt(index) {
 }
 function nextTrack(manual = false) { if (!state.queue.length) return; let next = state.queueIndex + 1; if (state.playMode === 'shuffle' && state.queue.length > 1) do next = Math.floor(Math.random() * state.queue.length); while (next === state.queueIndex); else if (!manual && state.playMode === 'one') next = state.queueIndex; void playAt(next) }
 function previousTrack() { if (elements.audio.currentTime > 4) { elements.audio.currentTime = 0; return } void playAt(state.queueIndex - 1) }
-function renderNowPlaying() { const track = state.current ? normalizeTrack(state.current) : null; elements.nowTitle.textContent = track?.title || '尚未播放'; elements.nowArtist.textContent = track?.artist || '选择一首歌曲开始播放'; renderCover(elements.nowCover, track?.artworkUrl, 'now'); elements.favoriteCurrent.disabled = !track; renderCurrentFavorite(); replaceIcons() }
-function renderCurrentFavorite() { const loved = state.current && state.loveIds.has(trackId(state.current)); elements.favoriteCurrent.classList.toggle('active', Boolean(loved)); elements.favoriteCurrent.title = loved ? '取消收藏' : '收藏' }
-async function toggleFavorite(track) { const id = trackId(track); const loved = state.loveIds.has(id); try { if (loved) await api.removeFromPlaylist('love', id); else await api.addToPlaylist('love', playlistTrack(track)); if (loved) state.loveIds.delete(id); else state.loveIds.add(id); if (state.view === 'playlist' && state.playlistId === 'love') await openPlaylist('love'); else renderTrackList(); renderCurrentFavorite(); await refreshPlaylists(); showToast(loved ? '已取消收藏' : '已收藏') } catch (error) { showToast(errorMessage(error), true) } }
+function renderNowPlaying() {
+  const track = state.current ? normalizeTrack(state.current) : null
+  elements.nowTitle.textContent = track?.title || '尚未播放'; elements.nowArtist.textContent = track?.artist || '选择一首歌曲开始播放'; renderCover(elements.nowCover, track?.artworkUrl, 'now'); elements.nowCover.disabled = !track; elements.favoriteCurrent.disabled = !track
+  elements.lyricsTitle.textContent = track?.title || '尚未播放'; elements.lyricsArtist.textContent = track?.artist || '-'; renderCover(elements.lyricsCover, track?.artworkUrl, 'lyrics'); elements.lyricsBackdrop.style.backgroundImage = track?.artworkUrl ? `url(${JSON.stringify(track.artworkUrl)})` : ''
+  renderCurrentFavorite(); replaceIcons()
+}
+function renderCurrentFavorite() { const loved = state.current && isFavorite(state.current); elements.favoriteCurrent.classList.toggle('active', Boolean(loved)); elements.favoriteCurrent.title = loved ? '取消收藏' : '收藏' }
+async function toggleFavorite(track) {
+  const existingId = favoriteTrackId(track, state.loveIndex); const loved = Boolean(existingId)
+  try {
+    if (loved) await api.removeFromPlaylist('love', existingId)
+    else await api.addToPlaylist('love', playlistTrack(track))
+    await refreshPlaylists()
+    if (state.view === 'playlist' && state.playlistId === 'love') await openPlaylist('love')
+    else { renderTrackList(); renderCurrentFavorite() }
+    showToast(loved ? '已取消收藏' : '已收藏')
+  } catch (error) { showToast(errorMessage(error), true) }
+}
 function showPlaylistMenu(anchor, track) { elements.playlistMenu.replaceChildren(); const playlists = state.playlists.filter(item => !['default', 'love'].includes(item.id)); if (!playlists.length) { const empty = document.createElement('button'); empty.type = 'button'; empty.textContent = '请先创建歌单'; empty.disabled = true; elements.playlistMenu.append(empty) } playlists.forEach(playlist => { const button = document.createElement('button'); button.type = 'button'; button.append(icon('list-music'), playlist.name); button.addEventListener('click', async () => { elements.playlistMenu.classList.add('hidden'); try { await api.addToPlaylist(playlist.id, playlistTrack(track)); await refreshPlaylists(); showToast(`已加入“${playlist.name}”`) } catch (error) { showToast(errorMessage(error), true) } }); elements.playlistMenu.append(button) }); const rect = anchor.getBoundingClientRect(); elements.playlistMenu.style.left = `${Math.min(rect.left, innerWidth - 220)}px`; elements.playlistMenu.style.top = `${Math.min(rect.bottom + 4, innerHeight - 280)}px`; elements.playlistMenu.classList.remove('hidden'); replaceIcons() }
 async function removeFromCurrentPlaylist(track) { try { await api.removeFromPlaylist(state.playlistId, trackId(track)); await openPlaylist(state.playlistId); await refreshPlaylists(); showToast('已从歌单移除') } catch (error) { showToast(errorMessage(error), true) } }
 async function downloadTrack(track) { state.downloads.set(trackId(track), 'downloading'); renderTrackList(); try { const result = await api.downloadTrack(rawTrack(track), elements.quality.value); if (result?.cancelled) { state.downloads.delete(trackId(track)); renderTrackList(); return } showToast(`已下载到 Windows：${result.path}`); state.downloads.delete(trackId(track)); renderTrackList() } catch (error) { state.downloads.delete(trackId(track)); renderTrackList(); showToast(`下载失败：${errorMessage(error)}`, true) } }
 function renderQueue() { elements.queueList.replaceChildren(); elements.queueCount.textContent = `${state.queue.length} 首`; state.queue.forEach((item, index) => { const row = document.createElement('div'); row.className = `queue-item${index === state.queueIndex ? ' playing' : ''}`; const copy = document.createElement('div'); copy.className = 'queue-item-copy'; const track = normalizeTrack(item); copy.append(Object.assign(document.createElement('strong'), { textContent: track.title }), Object.assign(document.createElement('span'), { textContent: track.artist })); copy.addEventListener('dblclick', () => void playAt(index)); const remove = makeIconButton('x', '移出队列'); remove.addEventListener('click', () => { state.queue.splice(index, 1); if (index < state.queueIndex) state.queueIndex--; else if (index === state.queueIndex && state.queue.length) { state.queueIndex = Math.min(index, state.queue.length - 1); void playAt(state.queueIndex) } else if (!state.queue.length) stopPlayback(); saveQueue(); renderQueue() }); row.append(copy, remove); elements.queueList.append(row) }); saveQueue(); replaceIcons() }
 function stopPlayback() { elements.audio.pause(); elements.audio.removeAttribute('src'); state.current = null; state.queueIndex = -1; renderNowPlaying(); renderTrackList(); elements.progress.value = 0; elements.elapsed.textContent = '0:00'; elements.duration.textContent = '0:00' }
-function showDetail(panel) { elements.detail.classList.add('open'); elements.detail.setAttribute('aria-hidden', 'false'); elements.detailTabs.forEach(tab => tab.classList.toggle('active', tab.dataset.panel === panel)); elements.queuePanel.classList.toggle('hidden', panel !== 'queue'); elements.lyricsPanel.classList.toggle('hidden', panel !== 'lyrics') }
-async function loadLyrics(track) { elements.lyricsContent.textContent = '正在读取歌词...'; try { const value = await api.getLyrics(rawTrack(track)); const content = value?.content || value?.lyric || value?.lrc || ''; elements.lyricsContent.textContent = stripLyricTags(content) || '暂无歌词' } catch { elements.lyricsContent.textContent = '暂无歌词' } }
-function stripLyricTags(value) { return String(value || '').split(/\r?\n/).map(line => line.replace(/^(?:\[[^\]]+\])+\s*/, '').trim()).filter(Boolean).join('\n') }
+function closeDetail() { elements.detail.classList.remove('open'); elements.detail.setAttribute('aria-hidden', 'true') }
+function toggleQueue() { if (elements.detail.classList.contains('open')) closeDetail(); else { elements.detail.classList.add('open'); elements.detail.setAttribute('aria-hidden', 'false') } }
+function openLyrics() { if (!state.current) return; closeDetail(); elements.lyricsView.classList.remove('hidden'); elements.lyricsView.setAttribute('aria-hidden', 'false'); syncLyrics(elements.audio.currentTime) }
+function closeLyrics() { elements.lyricsView.classList.add('hidden'); elements.lyricsView.setAttribute('aria-hidden', 'true') }
+function parseLyrics(value) {
+  const timed = []; const plain = []
+  for (const sourceLine of String(value || '').split(/\r?\n/)) {
+    const text = sourceLine.replace(/(?:\[[^\]]+\])+\s*/g, '').trim(); if (!text) continue
+    const timestamps = [...sourceLine.matchAll(/\[(\d{1,3}):(\d{1,2}(?:\.\d{1,3})?)\]/g)]
+    if (!timestamps.length) plain.push({ time: null, text })
+    else timestamps.forEach(match => timed.push({ time: Number(match[1]) * 60 + Number(match[2]), text }))
+  }
+  return timed.length ? timed.sort((a, b) => a.time - b.time) : plain
+}
+function renderLyrics(lines, status = '') {
+  state.lyrics = lines; state.activeLyricIndex = -1; elements.lyricsContent.replaceChildren()
+  if (!lines.length) { elements.lyricsContent.append(Object.assign(document.createElement('p'), { className: 'lyric-line', textContent: status || '暂无歌词' })); return }
+  lines.forEach(line => {
+    const item = Object.assign(document.createElement('p'), { className: 'lyric-line', textContent: line.text })
+    if (line.time !== null) { item.dataset.time = String(line.time); item.tabIndex = 0; item.setAttribute('role', 'button'); item.addEventListener('click', () => { elements.audio.currentTime = line.time; syncLyrics(line.time) }); item.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click() } }) }
+    elements.lyricsContent.append(item)
+  })
+}
+function syncLyrics(currentTime) {
+  if (!state.lyrics.length || state.lyrics[0].time === null) return
+  let active = -1
+  for (let index = 0; index < state.lyrics.length; index++) { if (state.lyrics[index].time > currentTime + 0.15) break; active = index }
+  if (active === state.activeLyricIndex) return
+  state.activeLyricIndex = active; const lines = elements.lyricsContent.querySelectorAll('.lyric-line'); lines.forEach((line, index) => line.classList.toggle('active', index === active)); if (active >= 0 && !elements.lyricsView.classList.contains('hidden')) lines[active]?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+async function loadLyrics(track) {
+  const requestId = ++state.lyricsRequestId; renderLyrics([], '正在读取歌词...')
+  try { const value = await api.getLyrics(rawTrack(track)); if (requestId !== state.lyricsRequestId) return; const content = value?.content || value?.lyric || value?.lrc || ''; renderLyrics(parseLyrics(content)); syncLyrics(elements.audio.currentTime) } catch { if (requestId === state.lyricsRequestId) renderLyrics([]) }
+}
 function handleDownloadProgress(value) { if (!value) return; if (value.status === 'downloading' && value.total) showToast(`正在下载 ${value.title}：${Math.round(value.received / value.total * 100)}%`); else if (value.status === 'downloading') showToast(`正在下载 ${value.title}：已接收 ${Math.round(value.received / 1024 / 1024 * 10) / 10} MB`); else if (value.status === 'completed') showToast(`下载完成：${value.path}`) }
 
 elements.searchForm.addEventListener('submit', event => { event.preventDefault(); void search() })
@@ -286,13 +327,19 @@ elements.createPlaylist.addEventListener('click', async () => { const name = win
 elements.renamePlaylist.addEventListener('click', async () => { const current = state.playlists.find(item => item.id === state.playlistId); const name = window.prompt('请输入新的歌单名称', current?.name || '')?.trim(); if (!name || name === current?.name) return; try { await api.renamePlaylist(state.playlistId, name); await refreshPlaylists(); await openPlaylist(state.playlistId); showToast('歌单已重命名') } catch (error) { showToast(errorMessage(error), true) } })
 elements.deletePlaylist.addEventListener('click', async () => { const current = state.playlists.find(item => item.id === state.playlistId); if (!current || !window.confirm(`删除歌单“${current.name}”？`)) return; try { await api.deletePlaylist(current.id); await refreshPlaylists(); await openPlaylist('love'); showToast('歌单已删除') } catch (error) { showToast(errorMessage(error), true) } })
 elements.playAll.addEventListener('click', () => { if (state.tracks.length) playFromTracks(state.tracks[0]) }); elements.favoriteCurrent.addEventListener('click', () => { if (state.current) void toggleFavorite(state.current) }); elements.playPause.addEventListener('click', () => { if (!state.current && state.queue.length) return void playAt(Math.max(0, state.queueIndex)); if (!state.current && state.tracks.length) return playFromTracks(state.tracks[0]); if (elements.audio.paused) elements.audio.play().catch(error => showToast(errorMessage(error), true)); else elements.audio.pause() }); elements.previous.addEventListener('click', previousTrack); elements.next.addEventListener('click', () => nextTrack(true))
-elements.playMode.addEventListener('click', () => { state.playMode = state.playMode === 'list' ? 'one' : state.playMode === 'one' ? 'shuffle' : 'list'; localStorage.setItem('yinyun-player-mode', state.playMode); renderPlayMode() }); elements.queueToggle.addEventListener('click', () => showDetail('queue')); elements.lyricsToggle.addEventListener('click', () => showDetail('lyrics')); elements.closeDetail.addEventListener('click', () => { elements.detail.classList.remove('open'); elements.detail.setAttribute('aria-hidden', 'true') }); elements.detailTabs.forEach(tab => tab.addEventListener('click', () => showDetail(tab.dataset.panel))); elements.clearQueue.addEventListener('click', () => { state.queue = []; stopPlayback(); renderQueue() })
-elements.volume.addEventListener('input', () => { elements.audio.volume = Number(elements.volume.value) / 100 }); elements.volume.addEventListener('change', () => api.savePreferences({ volume: elements.audio.volume })); elements.quality.addEventListener('change', () => api.savePreferences({ playbackQuality: elements.quality.value })); elements.progress.addEventListener('input', () => { if (Number.isFinite(elements.audio.duration)) elements.audio.currentTime = Number(elements.progress.value) / 1000 * elements.audio.duration }); elements.audio.addEventListener('timeupdate', () => { const duration = elements.audio.duration || 0; elements.progress.value = duration ? String(Math.round(elements.audio.currentTime / duration * 1000)) : '0'; elements.elapsed.textContent = formatTime(elements.audio.currentTime); elements.duration.textContent = formatTime(duration) }); elements.audio.addEventListener('play', () => setButtonIcon(elements.playPause, 'pause')); elements.audio.addEventListener('pause', () => setButtonIcon(elements.playPause, 'play')); elements.audio.addEventListener('ended', () => nextTrack(false)); elements.audio.addEventListener('error', () => { if (elements.audio.src) showToast('当前歌曲播放失败', true) }); document.addEventListener('click', event => { if (!elements.playlistMenu.contains(event.target)) elements.playlistMenu.classList.add('hidden') }); document.addEventListener('keydown', event => { if (event.code !== 'Space' || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return; event.preventDefault(); elements.playPause.click() })
+elements.playMode.addEventListener('click', () => { state.playMode = state.playMode === 'list' ? 'one' : state.playMode === 'one' ? 'shuffle' : 'list'; localStorage.setItem('yinyun-player-mode', state.playMode); renderPlayMode() }); elements.queueToggle.addEventListener('click', toggleQueue); elements.closeDetail.addEventListener('click', closeDetail); elements.nowCover.addEventListener('click', openLyrics); elements.closeLyrics.addEventListener('click', closeLyrics); elements.clearQueue.addEventListener('click', () => { state.queue = []; stopPlayback(); renderQueue() })
+elements.volume.addEventListener('input', () => { elements.audio.volume = Number(elements.volume.value) / 100 }); elements.volume.addEventListener('change', () => api.savePreferences({ volume: elements.audio.volume })); elements.quality.addEventListener('change', () => api.savePreferences({ playbackQuality: elements.quality.value })); elements.progress.addEventListener('input', () => { if (Number.isFinite(elements.audio.duration)) elements.audio.currentTime = Number(elements.progress.value) / 1000 * elements.audio.duration }); elements.audio.addEventListener('timeupdate', () => { const duration = elements.audio.duration || 0; elements.progress.value = duration ? String(Math.round(elements.audio.currentTime / duration * 1000)) : '0'; elements.elapsed.textContent = formatTime(elements.audio.currentTime); elements.duration.textContent = formatTime(duration); syncLyrics(elements.audio.currentTime) }); elements.audio.addEventListener('play', () => setButtonIcon(elements.playPause, 'pause')); elements.audio.addEventListener('pause', () => setButtonIcon(elements.playPause, 'play')); elements.audio.addEventListener('ended', () => nextTrack(false)); elements.audio.addEventListener('error', () => { if (elements.audio.src) showToast('当前歌曲播放失败', true) }); document.addEventListener('click', event => { if (!elements.playlistMenu.contains(event.target)) elements.playlistMenu.classList.add('hidden') }); document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeLyrics(); closeDetail(); return } if (event.code !== 'Space' || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return; event.preventDefault(); elements.playPause.click() })
 elements.downloadDirectory.addEventListener('click', async () => { try { const result = await api.chooseDownloadDirectory(); if (!result?.success) return; state.app.config.downloadDirectory = result.directory; elements.aboutDownloadDirectory.textContent = result.directory; showToast(`下载目录已设置：${result.directory}`) } catch (error) { showToast(errorMessage(error), true) } })
-api.onDownloadProgress(handleDownloadProgress); api.onState(value => { state.app = value; const connected = Boolean(value.account); elements.accountName.textContent = connected ? value.account.username : '连接已断开'; elements.connectionDot.classList.toggle('offline', !connected) })
+function renderAppState(value) {
+  state.app = value; const connected = Boolean(value.account); elements.accountName.textContent = connected ? value.account.username : '连接已断开'; elements.connectionDot.classList.toggle('offline', !connected)
+  elements.aboutVersion.textContent = `v${value.appVersion}`; elements.aboutAccount.textContent = value.account?.username || '-'; elements.aboutServer.textContent = value.account?.serverUrl || '-'; elements.aboutDownloadDirectory.textContent = value.config.downloadDirectory || '首次下载时选择'
+  const update = value.availableUpdate; elements.aboutUpdate.classList.toggle('hidden', !update); elements.aboutUpdate.textContent = update ? `有新版本 v${update.version}` : ''; elements.aboutUpdate.dataset.url = update?.url || ''
+}
+elements.aboutUpdate.addEventListener('click', () => { const url = elements.aboutUpdate.dataset.url; if (url) api.openExternal(url) })
+api.onDownloadProgress(handleDownloadProgress); api.onState(renderAppState)
 
 async function initialize() {
   replaceIcons(); renderPlayMode(); renderQueue(); updateSearchControls()
-  try { state.app = await api.getState(); elements.accountName.textContent = state.app.account?.username || '连接已断开'; elements.aboutVersion.textContent = `v${state.app.appVersion}`; elements.aboutAccount.textContent = state.app.account?.username || '-'; elements.aboutServer.textContent = state.app.account?.serverUrl || '-'; elements.aboutDownloadDirectory.textContent = state.app.config.downloadDirectory || '首次下载时选择'; elements.quality.value = state.app.config.playbackQuality || 'flac'; elements.audio.volume = state.app.config.volume ?? 0.8; elements.volume.value = String(Math.round(elements.audio.volume * 100)); await refreshPlaylists(); await refreshLibraries(); await openPlaylist('love') } catch (error) { showToast(errorMessage(error), true) }
+  try { renderAppState(await api.getState()); elements.quality.value = state.app.config.playbackQuality || 'flac'; elements.audio.volume = state.app.config.volume ?? 0.8; elements.volume.value = String(Math.round(elements.audio.volume * 100)); await refreshPlaylists(); await refreshLibraries(); await openPlaylist('love') } catch (error) { showToast(errorMessage(error), true) }
 }
 void initialize()

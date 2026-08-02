@@ -25,6 +25,7 @@ win:
 
 nsis:
   artifactName: "Yinyun-Windows-Client-${version}-${arch}-Setup.${ext}"
+  include: build/installer.nsh
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

@@ -22,7 +22,7 @@ const { createSecureJsonStore } = require('./secure-store.cjs')
 const { createSnapshotStore } = require('./snapshot-store.cjs')
 const { createDownloadParts, getDownloadExtension, getUniqueDownloadPath, trackForDownload } = require('./download.cjs')
 const { normalizeServerUrl, readCapabilities } = require('./url.cjs')
-const { compareVersions, LATEST_RELEASE_API, parseLatestRelease } = require('./update.cjs')
+const { compareVersions, isReleaseUrl, LATEST_RELEASE_API, parseLatestRelease } = require('./update.cjs')
 
 const REQUEST_TIMEOUT_MS = 12_000
 const SNAPSHOT_INTERVAL_MS = 30_000
@@ -51,6 +51,7 @@ let snapshotTimer = null
 let quitting = false
 let connectionState = { status: 'idle', message: '尚未登录' }
 let syncState = { status: 'idle', message: '等待登录', local: null, server: null }
+let availableUpdate = null
 
 function getIcon() {
   return nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon.png'))
@@ -71,7 +72,13 @@ async function checkForClientUpdate() {
     const response = await fetchWithTimeout(LATEST_RELEASE_API)
     if (!response.ok) return
     const release = parseLatestRelease(await response.json())
-    if (!release || compareVersions(app.getVersion(), release.version) >= 0) return
+    if (!release || compareVersions(app.getVersion(), release.version) >= 0) {
+      availableUpdate = null
+      sendState()
+      return
+    }
+    availableUpdate = release
+    sendState()
     if (configStore.read().lastUpdateVersion === release.version) return
 
     const options = {
@@ -156,6 +163,7 @@ function getPublicState() {
     sync: { status: syncState.status, message: syncState.message, local: snapshotSummary(local) },
     account: currentAccount ? { username: currentAccount.username, serverUrl: currentAccount.serverUrl } : null,
     appVersion: app.getVersion(),
+    availableUpdate,
     repository: APP_REPOSITORY,
   }
 }
@@ -569,7 +577,7 @@ function registerIpc() {
   ipcMain.handle('client:save-preferences', (_event, preferences) => savePreferences(preferences))
   ipcMain.handle('client:logout', async () => { await clearCurrentLogin(); return { success: true } })
   ipcMain.handle('client:remove-server', async () => { await clearCurrentLogin({ removeServer: true }); return { success: true } })
-  ipcMain.handle('client:open-external', (_event, url) => { if (url === APP_REPOSITORY) return shell.openExternal(url) })
+  ipcMain.handle('client:open-external', (_event, url) => { if (url === APP_REPOSITORY || isReleaseUrl(url)) return shell.openExternal(url) })
 }
 
 app.on('second-instance', () => {
