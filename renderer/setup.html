@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>音云 - 同步中心</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../assets/icon.png" alt="音云" class="logo">
+        <div class="brand-copy">
+          <strong>音云</strong>
+          <span>Windows 客户端</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="客户端设置">
+        <button class="nav-item active" type="button" data-view="account">账户连接</button>
+        <button class="nav-item" type="button" data-view="sync">同步与恢复</button>
+        <button class="nav-item" type="button" data-view="settings">客户端设置</button>
+      </nav>
+
+      <div class="sidebar-status" aria-live="polite">
+        <span id="state-dot" class="state-dot idle"></span>
+        <div>
+          <strong id="state-label">尚未登录</strong>
+          <span id="state-detail">等待连接音云服务器</span>
+        </div>
+      </div>
+      <button id="repository-btn" class="sidebar-link" type="button">GitHub 项目主页</button>
+      <span id="app-version" class="version"></span>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="view-title">账户连接</h1>
+          <p id="view-description">登录 NAS 上的音云同步账户</p>
+        </div>
+        <button id="open-player-btn" class="primary hidden" type="button">打开播放器</button>
+      </header>
+
+      <section id="view-account" class="view active">
+        <form id="login-form" class="form-grid">
+          <div class="field field-wide">
+            <label for="server-url">服务器地址</label>
+            <div class="input-action">
+              <input id="server-url" type="text" inputmode="url" autocomplete="url"
+                placeholder="http://192.168.1.10:9527" spellcheck="false" required>
+              <button id="test-btn" class="secondary" type="button">检测</button>
+            </div>
+            <p>填写服务器根地址，不要添加 <code>/music</code> 或 <code>/rest</code>。</p>
+          </div>
+          <div class="field">
+            <label for="username">同步账户</label>
+            <input id="username" type="text" autocomplete="username" placeholder="admin" required>
+          </div>
+          <div class="field">
+            <label for="password">同步密码</label>
+            <input id="password" type="password" autocomplete="current-password" required>
+          </div>
+
+          <div id="result" class="notice hidden" role="status">
+            <strong id="result-title"></strong>
+            <span id="result-message"></span>
+          </div>
+
+          <div class="form-actions field-wide">
+            <button id="remove-btn" class="danger hidden" type="button">移除服务器</button>
+            <span></span>
+            <button id="logout-btn" class="secondary hidden" type="button">退出账户</button>
+            <button id="login-btn" class="primary" type="submit">登录并打开播放器</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="view-sync" class="view">
+        <div class="sync-overview">
+          <div>
+            <span class="eyebrow">本地安全快照</span>
+            <strong id="sync-time">尚未创建</strong>
+            <p id="sync-message">登录后，客户端会定期保存服务端同步数据。</p>
+          </div>
+          <span id="sync-status" class="status-badge idle">等待登录</span>
+        </div>
+
+        <dl class="stats">
+          <div><dt>歌单</dt><dd id="stat-playlists">0</dd></div>
+          <div><dt>歌曲记录</dt><dd id="stat-tracks">0</dd></div>
+          <div><dt>不喜欢规则</dt><dd id="stat-dislikes">0</dd></div>
+          <div><dt>自有音源</dt><dd id="stat-sources">0</dd></div>
+        </dl>
+
+        <div class="action-list">
+          <div class="action-row">
+            <div><strong>立即保存本地快照</strong><p>从服务端读取当前歌单、设置和自有音源并加密保存在本机。</p></div>
+            <button id="backup-btn" class="secondary" type="button">立即备份</button>
+          </div>
+          <div class="action-row warning-row">
+            <div><strong>恢复到服务端</strong><p>服务端数据丢失后，将本机快照恢复到当前登录账户。覆盖前会再次确认。</p></div>
+            <button id="restore-btn" class="warning" type="button">恢复数据</button>
+          </div>
+          <div class="action-row">
+            <div><strong>导出或导入备份文件</strong><p>用于更换电脑、服务器地址变化或手动离线保存。</p></div>
+            <div class="button-group">
+              <button id="import-btn" class="secondary" type="button">导入</button>
+              <button id="export-btn" class="secondary" type="button">导出</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-settings" class="view">
+        <div class="settings-list">
+          <label class="toggle-row">
+            <span><strong>关闭窗口时最小化到托盘</strong><small>保持音乐继续播放</small></span>
+            <input id="minimize-to-tray" type="checkbox">
+          </label>
+          <label class="toggle-row">
+            <span><strong>开机自动启动</strong><small>登录 Windows 后自动启动音云客户端</small></span>
+            <input id="launch-at-login" type="checkbox">
+          </label>
+          <label class="toggle-row">
+            <span><strong>启动后最小化到托盘</strong><small>适合长期作为后台播放器使用</small></span>
+            <input id="start-minimized" type="checkbox">
+          </label>
+        </div>
+      </section>
+    </section>
+  </main>
+  <script src="setup.js"></script>
+</body>
+</html>

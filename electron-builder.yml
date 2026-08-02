@@ -1,0 +1,37 @@
+appId: io.github.bobcc4.yinyun.windows
+productName: 音云
+copyright: "Copyright © 2026 bobcc4"
+
+directories:
+  output: release
+
+files:
+  - electron/**/*
+  - renderer/**/*
+  - assets/**/*
+  - package.json
+  - LICENSE
+  - NOTICE.md
+
+asar: true
+icon: assets/icon.png
+
+win:
+  artifactName: "Yinyun-Windows-Client-${version}-${arch}.${ext}"
+  target:
+    - nsis
+    - portable
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  artifactName: "Yinyun-Windows-Client-${version}-${arch}-Setup.${ext}"
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "音云"
+
+portable:
+  artifactName: "Yinyun-Windows-Client-${version}-${arch}-Portable.${ext}"
