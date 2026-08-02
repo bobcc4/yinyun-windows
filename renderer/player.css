@@ -63,7 +63,7 @@ h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 
 .tracks-view { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 10px 34px 20px; }
 .search-view + .tracks-view { padding-top: 0; }
 .tracks-toolbar { height: 52px; display: flex; align-items: center; }
-.track-columns, .track-row { display: grid; grid-template-columns: minmax(240px, 2fr) minmax(130px, 1fr) 55px 58px 112px; gap: 14px; align-items: center; }
+.track-columns, .track-row { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(110px, 1fr) 50px 54px 192px; gap: 10px; align-items: center; }
 .track-columns { height: 34px; flex: 0 0 auto; padding: 0 12px; border-bottom: 1px solid var(--line); color: #8a9690; font-size: 11px; }
 .track-list { min-height: 0; overflow: auto; }
 .track-list::-webkit-scrollbar, .detail-content::-webkit-scrollbar { width: 7px; }
@@ -80,9 +80,9 @@ h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 
 .track-copy strong { font-weight: 600; }
 .track-copy span { margin-top: 4px; color: var(--muted); font-size: 12px; }
 .track-album { color: #5e6b65; font-size: 12px; }
-.track-source { color: #678176; font-size: 11px; text-transform: uppercase; }
-.track-duration { color: #7a8781; font-variant-numeric: tabular-nums; font-size: 12px; }
-.track-actions { display: flex; justify-content: flex-end; gap: 3px; opacity: .12; }
+.track-source { min-width: 0; color: #678176; font-size: 11px; text-transform: uppercase; }
+.track-duration { min-width: 0; color: #7a8781; font-variant-numeric: tabular-nums; font-size: 12px; }
+.track-actions { min-width: 0; display: flex; justify-content: flex-end; gap: 3px; opacity: .12; }
 .track-row:hover .track-actions, .track-actions:focus-within, .track-row.playing .track-actions { opacity: 1; }
 .icon-button { width: 36px; height: 36px; display: inline-grid; place-items: center; flex: 0 0 auto; padding: 0; border: 1px solid #cfdbd5; border-radius: 6px; color: #53645c; background: #fff; }
 .icon-button:hover { color: var(--green-dark); background: #edf5f1; }
@@ -151,7 +151,8 @@ input[type="range"] { height: 18px; accent-color: var(--green); cursor: pointer;
 
 @media (max-width: 1100px) {
   .player-shell { grid-template-columns: 194px minmax(0, 1fr); }
-  .track-columns, .track-row { grid-template-columns: minmax(220px, 2fr) minmax(120px, 1fr) 45px 52px 76px; gap: 8px; }
+  .tracks-view { padding-right: 24px; padding-left: 24px; }
+  .track-columns, .track-row { grid-template-columns: minmax(190px, 2fr) minmax(90px, 1fr) 40px 48px 192px; gap: 8px; }
   .player-bar { grid-template-columns: minmax(220px,.9fr) minmax(350px,1.2fr) minmax(220px,.8fr); gap: 10px; }
   .player-tools select { display: none; }
 }
@@ -176,6 +177,8 @@ input[type="range"] { height: 18px; accent-color: var(--green); cursor: pointer;
 .entity-list { display: grid; gap: 7px; }
 .entity-row { min-height: 68px; display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 13px; align-items: center; padding: 7px 10px; border-bottom: 1px solid #e6ece9; border-radius: 5px; background: #fff; }
 .entity-row:hover { background: #edf4f1; }
+.entity-row[role="button"] { cursor: pointer; }
+.entity-row[role="button"]:focus-visible { outline: 2px solid rgba(22,133,99,.4); outline-offset: -2px; }
 .entity-cover { width: 52px; height: 52px; display: grid; place-items: center; overflow: hidden; border-radius: 5px; color: #6b8579; background: #dce9e3; }
 .entity-cover img { width: 100%; height: 100%; object-fit: cover; }
 .entity-cover .lucide { width: 22px; height: 22px; }
@@ -187,6 +190,30 @@ input[type="range"] { height: 18px; accent-color: var(--green); cursor: pointer;
 .entity-actions .icon-button.active { color: #d84b61; }
 .entity-empty { min-height: 220px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--muted); }
 .entity-empty .lucide { width: 34px; height: 34px; color: #a5b8af; }
+.entity-empty.loading .lucide { animation: spin .8s linear infinite; }
+.entity-detail-summary { min-height: 104px; display: grid; grid-template-columns: 36px 76px minmax(0, 1fr); gap: 15px; align-items: center; padding: 12px 4px 14px; border-bottom: 1px solid var(--line); }
+.entity-detail-cover { width: 76px; height: 76px; display: grid; place-items: center; overflow: hidden; border-radius: 6px; color: #6b8579; background: #dce9e3; }
+.entity-detail-cover img { width: 100%; height: 100%; object-fit: cover; }
+.entity-detail-cover .lucide { width: 28px; height: 28px; }
+.entity-detail-copy { min-width: 0; align-self: center; }
+.entity-detail-copy strong, .entity-detail-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-detail-copy strong { font-size: 17px; }
+.entity-detail-copy span { margin-top: 5px; color: var(--muted); font-size: 12px; }
+.entity-detail-copy p { display: -webkit-box; max-width: 760px; margin-top: 6px; overflow: hidden; color: #718078; font-size: 11px; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.related-albums { flex: 0 0 auto; padding: 12px 0 14px; border-bottom: 1px solid var(--line); }
+.related-albums > header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 9px; }
+.related-albums > header span { color: var(--muted); font-size: 11px; }
+.related-album-list { display: grid; grid-auto-flow: column; grid-auto-columns: 148px; gap: 9px; overflow-x: auto; padding-bottom: 5px; }
+.related-album-list::-webkit-scrollbar { height: 6px; }
+.related-album-list::-webkit-scrollbar-thumb { border-radius: 6px; background: #cbd6d0; }
+.album-card { min-width: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 9px; align-items: center; padding: 7px; border: 1px solid #dae4df; border-radius: 6px; color: #31433b; background: #fff; text-align: left; }
+.album-card:hover { border-color: #91c3ae; background: #edf7f2; }
+.album-card-cover { width: 44px; height: 44px; display: grid; place-items: center; overflow: hidden; border-radius: 4px; color: #6b8579; background: #dce9e3; }
+.album-card-cover img { width: 100%; height: 100%; object-fit: cover; }
+.album-card-copy { min-width: 0; }
+.album-card-copy strong, .album-card-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.album-card-copy strong { font-size: 12px; }
+.album-card-copy span { margin-top: 4px; color: var(--muted); font-size: 10px; }
 .track-actions .download-active { color: var(--green-dark); opacity: 1; }
 @media (max-width: 1250px) {
   .search-bar { grid-template-columns: 20px minmax(100px, 1fr) auto auto; }

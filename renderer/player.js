@@ -11,6 +11,8 @@ const elements = {
   leaderboardView: byId('leaderboards-view'), leaderboardSource: byId('leaderboard-source'), leaderboardStatus: byId('leaderboard-status'), leaderboardList: byId('leaderboard-list'),
   libraryView: byId('library-view'), libraryLabel: byId('library-kind-label'), libraryRefresh: byId('library-refresh'), entityList: byId('entity-list'),
   tracksView: byId('tracks-view'), tracksToolbar: byId('tracks-toolbar'), playAll: byId('play-all'), trackList: byId('track-list'),
+  entityDetailSummary: byId('entity-detail-summary'), entityDetailBack: byId('entity-detail-back'), entityDetailCover: byId('entity-detail-cover'), entityDetailName: byId('entity-detail-name'), entityDetailMeta: byId('entity-detail-meta'), entityDetailDescription: byId('entity-detail-description'),
+  relatedAlbums: byId('related-albums'), relatedAlbumCount: byId('related-album-count'), relatedAlbumList: byId('related-album-list'),
   empty: byId('empty-state'), loading: byId('loading-state'), about: byId('about-view'),
   accountName: byId('account-name'), connectionDot: byId('connection-dot'), syncCenter: byId('sync-center'),
   aboutVersion: byId('about-version'), aboutAccount: byId('about-account'), aboutServer: byId('about-server'), aboutDownloadDirectory: byId('about-download-directory'),
@@ -25,7 +27,7 @@ const state = {
   queue: readQueue(), queueIndex: -1, current: null, searchSource: 'tx', searchType: 'song',
   loading: false, playMode: localStorage.getItem('yinyun-player-mode') || 'list', loveIds: new Set(),
   libraries: { artists: [], albums: [] }, libraryType: 'artists', boardSource: 'tx', boards: [],
-  resolving: false, toastTimer: null, downloads: new Map(), boardId: null,
+  resolving: false, toastTimer: null, downloads: new Map(), boardId: null, entityDetail: null, detailHistory: [],
 }
 
 function readQueue() {
@@ -51,14 +53,19 @@ function normalizeTrack(value) {
   return {
     id: String(value?.id || raw.id || raw.songmid || raw.hash || ''),
     title: String(value?.title || raw.name || '未知歌曲'), artist: String(value?.artist || raw.singer || '未知歌手'),
-    album: String(value?.album || raw.albumName || raw.album || ''), source: String(value?.source || raw.source || 'unknown'),
-    duration: value?.duration ?? raw.interval ?? 0, artworkUrl: value?.artworkUrl || raw.img || raw.picUrl || '', raw,
+    album: String(value?.album || raw.albumName || raw.album || raw.meta?.albumName || ''), source: String(value?.source || raw.source || 'unknown'),
+    duration: value?.duration ?? raw.interval ?? raw.meta?.interval ?? 0, artworkUrl: value?.artworkUrl || raw.img || raw.picUrl || raw.meta?.picUrl || raw.album?.picUrl || '', raw,
   }
 }
 function entityKey(value) { const item = value?.raw || value || {}; return `${item.source || value?.source || ''}_${item.id || item.mid || value?.id || ''}` }
 function normalizeEntity(value, type) {
   const raw = value?.raw || value || {}
-  return { id: String(value?.id || raw.id || raw.mid || ''), name: String(value?.name || raw.name || '未知'), artist: String(value?.artist || raw.artistName || raw.artist || ''), source: String(value?.source || raw.source || 'unknown'), artworkUrl: value?.artworkUrl || raw.picUrl || raw.img || '', kind: type, raw }
+  return {
+    id: String(value?.id || raw.id || raw.mid || ''), name: String(value?.name || raw.name || '未知'), artist: String(value?.artist || raw.artistName || raw.artist || raw.singer || ''),
+    source: String(value?.source || raw.source || 'unknown'), artworkUrl: value?.artworkUrl || raw.picUrl || raw.img || raw.info?.img || '', kind: type,
+    trackCount: Number(value?.trackCount ?? raw.size ?? raw.total ?? raw.count ?? 0), albumCount: Number(value?.albumCount ?? raw.albumSize ?? 0),
+    publishTime: value?.publishTime || raw.publishTime || raw.info?.publishTime || '', raw,
+  }
 }
 function formatTime(value) {
   if (typeof value === 'string' && /^\d{1,3}:\d{2}$/.test(value)) return value
@@ -83,7 +90,7 @@ function setActiveNavigation(attribute, value) {
 }
 function showMode(mode) {
   elements.searchView.classList.toggle('hidden', !['search', 'searchEntities'].includes(mode)); elements.leaderboardView.classList.toggle('hidden', mode !== 'leaderboards')
-  elements.libraryView.classList.toggle('hidden', !['artists', 'albums', 'searchEntities'].includes(mode)); elements.tracksView.classList.toggle('hidden', !['playlist', 'search', 'leaderboardTracks'].includes(mode)); elements.about.classList.toggle('hidden', mode !== 'about')
+  elements.libraryView.classList.toggle('hidden', !['artists', 'albums', 'searchEntities'].includes(mode)); elements.tracksView.classList.toggle('hidden', !['playlist', 'search', 'leaderboardTracks', 'artistDetail', 'albumDetail'].includes(mode)); elements.about.classList.toggle('hidden', mode !== 'about')
 }
 function renderPlayMode() {
   const modes = { list: ['repeat-2', '列表循环'], one: ['repeat-1', '单曲循环'], shuffle: ['shuffle', '随机播放'] }; const [name, title] = modes[state.playMode] || modes.list
@@ -119,6 +126,9 @@ function renderCover(parent, url, size = 'small') {
   if (!url) return parent.append(icon('music-2'))
   const image = document.createElement('img'); image.src = url; image.alt = ''; image.addEventListener('error', () => parent.replaceChildren(icon('music-2')), { once: true }); parent.append(image)
 }
+function resetEntityDetailView() {
+  elements.entityDetailSummary.classList.add('hidden'); elements.relatedAlbums.classList.add('hidden'); elements.relatedAlbumList.replaceChildren(); state.entityDetail = null
+}
 function renderTrackList() {
   elements.trackList.replaceChildren()
   state.tracks.forEach(sourceTrack => {
@@ -133,49 +143,119 @@ function renderTrackList() {
   elements.empty.classList.toggle('hidden', state.tracks.length > 0 || state.loading); elements.tracksToolbar.classList.toggle('hidden', state.tracks.length === 0); replaceIcons()
 }
 async function openPlaylist(id) {
-  state.view = 'playlist'; state.playlistId = id; state.boardId = null; setActiveNavigation('data-playlist', id); showMode('playlist'); elements.playlistActions.classList.toggle('hidden', ['love', 'default'].includes(id)); const summary = state.playlists.find(item => item.id === id); elements.title.textContent = summary?.name || (id === 'love' ? '我喜欢的音乐' : '歌单'); setLoading(true)
+  state.detailHistory = []; resetEntityDetailView(); state.view = 'playlist'; state.playlistId = id; state.boardId = null; setActiveNavigation('data-playlist', id); showMode('playlist'); elements.playlistActions.classList.toggle('hidden', ['love', 'default'].includes(id)); const summary = state.playlists.find(item => item.id === id); elements.title.textContent = summary?.name || (id === 'love' ? '我喜欢的音乐' : '歌单'); setLoading(true)
   try { const playlist = await api.getPlaylist(id); state.tracks = playlist.items || []; elements.title.textContent = playlist.name; elements.subtitle.textContent = `${state.tracks.length} 首歌曲`; if (id === 'love') state.loveIds = new Set(state.tracks.map(trackId)); renderTrackList() } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
 }
 function openSearch() {
-  state.view = 'search'; state.playlistId = ''; state.tracks = []; state.entities = []; setActiveNavigation('data-view', 'search'); showMode('search'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '搜索'; elements.subtitle.textContent = '搜索在线曲库'; elements.trackList.replaceChildren(); elements.entityList.replaceChildren(); elements.empty.classList.remove('hidden'); elements.searchInput.focus()
+  state.detailHistory = []; resetEntityDetailView(); state.view = 'search'; state.playlistId = ''; state.tracks = []; state.entities = []; setActiveNavigation('data-view', 'search'); showMode('search'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '搜索'; elements.subtitle.textContent = '搜索在线曲库'; elements.trackList.replaceChildren(); elements.entityList.replaceChildren(); elements.empty.classList.remove('hidden'); elements.searchInput.focus()
 }
 async function search() {
   const query = elements.searchInput.value.trim(); if (!query) return elements.searchInput.focus(); setLoading(true)
+  if (state.searchType === 'song') {
+    resetEntityDetailView(); state.view = 'search'; showMode('search')
+    try { const result = await api.search({ query, source: state.searchSource, page: 1, limit: 50 }); state.tracks = result.items || []; elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · ${state.tracks.length} 首结果`; renderTrackList() } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
+    return
+  }
+  setLoading(false); state.view = 'searchEntities'; showMode('searchEntities'); elements.title.textContent = state.searchType === 'singer' ? '歌手搜索' : '专辑搜索'; elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · 正在搜索`; renderEntityStatus('正在搜索...', 'loader-circle', true)
   try {
-    if (state.searchType === 'song') { const result = await api.search({ query, source: state.searchSource, page: 1, limit: 50 }); state.tracks = result.items || []; elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · ${state.tracks.length} 首结果`; showMode('search'); renderTrackList() }
-    else { const result = await api.searchEntities({ query, type: state.searchType, source: state.searchSource, page: 1, limit: 50 }); state.entities = (result.items || []).map(item => normalizeEntity(item, state.searchType)); elements.title.textContent = state.searchType === 'singer' ? '歌手搜索' : '专辑搜索'; elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · ${state.entities.length} 个结果`; showMode('searchEntities'); renderEntities(state.searchType, state.entities) }
-  } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
+    const result = await api.searchEntities({ query, type: state.searchType, source: state.searchSource, page: 1, limit: 50 })
+    state.entities = (result.items || []).map(item => normalizeEntity(item, state.searchType)); elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · ${state.entities.length} 个结果`; renderEntities(state.searchType, state.entities)
+  } catch (error) {
+    const message = errorMessage(error); elements.subtitle.textContent = `${state.searchSource.toUpperCase()} · 搜索失败`; renderEntityStatus(message, 'circle-alert'); showToast(message, true)
+  }
+}
+function entitySubtitle(item) {
+  const parts = [item.source.toUpperCase()]
+  if (item.kind === 'singer' && item.albumCount) parts.push(`${item.albumCount} 张专辑`)
+  if (item.kind === 'album' && item.trackCount) parts.push(`${item.trackCount} 首歌曲`)
+  if (item.artist && item.artist !== item.name) parts.push(item.artist)
+  if (item.publishTime) parts.push(String(item.publishTime).slice(0, 10))
+  return parts.join(' · ')
+}
+function renderEntityStatus(message, iconName = 'search-x', loading = false) {
+  elements.entityList.replaceChildren(); elements.libraryRefresh.classList.add('hidden'); const empty = createEntityEmpty(message, iconName); empty.classList.toggle('loading', loading); elements.entityList.append(empty); elements.entityList.classList.remove('hidden')
+}
+function bindEntityOpen(row, item) {
+  row.setAttribute('role', 'button'); row.tabIndex = 0
+  row.addEventListener('click', event => { if (!event.target.closest('button')) void openEntityDetail(item) })
+  row.addEventListener('keydown', event => { if ((event.key === 'Enter' || event.key === ' ') && !event.target.closest('button')) { event.preventDefault(); void openEntityDetail(item) } })
 }
 function renderEntities(kind, items) {
   elements.entityList.replaceChildren(); elements.libraryRefresh.classList.add('hidden'); elements.trackList.classList.add('hidden'); elements.empty.classList.add('hidden')
   items.forEach(item => {
-    const row = document.createElement('article'); row.className = 'entity-row'; const cover = document.createElement('div'); renderCover(cover, item.artworkUrl, 'entity'); const info = document.createElement('div'); info.className = 'entity-copy'; info.append(Object.assign(document.createElement('strong'), { textContent: item.name }), Object.assign(document.createElement('span'), { textContent: `${item.source.toUpperCase()}${item.artist ? ` · ${item.artist}` : ''}` })); const actions = document.createElement('div'); actions.className = 'entity-actions'; const favorite = makeIconButton('heart', isEntityLoved(kind, item) ? '取消收藏' : '收藏'); favorite.classList.toggle('active', isEntityLoved(kind, item)); favorite.addEventListener('click', () => void toggleEntityFavorite(kind === 'singer' ? 'artists' : 'albums', item)); const searchSongs = makeIconButton('music-2', '搜索相关歌曲'); searchSongs.addEventListener('click', () => { elements.searchInput.value = item.name; state.searchType = 'song'; elements.searchTypes.forEach(button => button.classList.toggle('active', button.dataset.type === 'song')); void search() }); actions.append(favorite, searchSongs); row.append(cover, info, actions); elements.entityList.append(row)
+    const row = document.createElement('article'); row.className = 'entity-row'; bindEntityOpen(row, item); const cover = document.createElement('div'); renderCover(cover, item.artworkUrl, 'entity'); const info = document.createElement('div'); info.className = 'entity-copy'; info.append(Object.assign(document.createElement('strong'), { textContent: item.name }), Object.assign(document.createElement('span'), { textContent: entitySubtitle(item) })); const actions = document.createElement('div'); actions.className = 'entity-actions'; const favorite = makeIconButton('heart', isEntityLoved(kind, item) ? '取消收藏' : '收藏'); favorite.classList.toggle('active', isEntityLoved(kind, item)); favorite.addEventListener('click', () => void toggleEntityFavorite(kind === 'singer' ? 'artists' : 'albums', item)); const open = makeIconButton('chevron-right', '查看详情'); open.addEventListener('click', () => void openEntityDetail(item)); actions.append(favorite, open); row.append(cover, info, actions); elements.entityList.append(row)
   }); if (!items.length) elements.entityList.append(createEntityEmpty('没有找到匹配结果')); elements.libraryLabel.textContent = `搜索结果 · ${items.length} 个`; elements.entityList.classList.remove('hidden'); replaceIcons()
 }
-function createEntityEmpty(message) { const empty = document.createElement('div'); empty.className = 'entity-empty'; empty.append(icon('search-x'), Object.assign(document.createElement('span'), { textContent: message })); return empty }
+function createEntityEmpty(message, iconName = 'search-x') { const empty = document.createElement('div'); empty.className = 'entity-empty'; empty.append(icon(iconName), Object.assign(document.createElement('span'), { textContent: message })); return empty }
 function isEntityLoved(kind, item) { const type = kind === 'singer' ? 'artists' : kind === 'album' ? 'albums' : kind; return state.libraries[type].some(saved => entityKey(saved) === entityKey(item)) }
 async function toggleEntityFavorite(type, item) {
   try { const list = state.libraries[type].slice(); const index = list.findIndex(saved => entityKey(saved) === entityKey(item)); if (index >= 0) list.splice(index, 1); else list.unshift({ ...item.raw, id: item.id, name: item.name, source: item.source, picUrl: item.artworkUrl, artistName: item.artist }); await api.saveLibrary(type, list); state.libraries[type] = list; if (state.view === type) renderLibrary(type); else renderEntities(item.kind, state.entities); showToast(index >= 0 ? '已取消收藏' : '已收藏') } catch (error) { showToast(errorMessage(error), true) }
 }
-async function openLibrary(type) {
-  state.view = type; state.libraryType = type; setActiveNavigation('data-view', type); showMode(type); elements.playlistActions.classList.add('hidden'); elements.title.textContent = type === 'artists' ? '收藏歌手' : '收藏专辑'
+async function openLibrary(type, preserveHistory = false) {
+  if (!preserveHistory) state.detailHistory = []; resetEntityDetailView(); state.view = type; state.libraryType = type; setActiveNavigation('data-view', type); showMode(type); elements.playlistActions.classList.add('hidden'); elements.title.textContent = type === 'artists' ? '收藏歌手' : '收藏专辑'
   try { await refreshLibraries(); renderLibrary(type) } catch (error) { showToast(errorMessage(error), true) }
 }
 function renderLibrary(type) {
   const items = state.libraries[type].map(item => normalizeEntity(item, type === 'artists' ? 'singer' : 'album')); elements.libraryRefresh.classList.remove('hidden'); elements.libraryLabel.textContent = `${items.length} 个${type === 'artists' ? '歌手' : '专辑'}`; elements.entityList.classList.remove('hidden'); elements.trackList.classList.add('hidden'); elements.empty.classList.add('hidden'); elements.entityList.replaceChildren()
-  items.forEach(item => { const row = document.createElement('article'); row.className = 'entity-row'; const cover = document.createElement('div'); renderCover(cover, item.artworkUrl, 'entity'); const copy = document.createElement('div'); copy.className = 'entity-copy'; copy.append(Object.assign(document.createElement('strong'), { textContent: item.name }), Object.assign(document.createElement('span'), { textContent: `${item.source.toUpperCase()}${item.artist ? ` · ${item.artist}` : ''}` })); const actions = document.createElement('div'); actions.className = 'entity-actions'; const searchSongs = makeIconButton('music-2', '搜索相关歌曲'); searchSongs.addEventListener('click', () => { openSearch(); elements.searchInput.value = item.name; void search() }); const remove = makeIconButton('heart-off', '取消收藏'); remove.classList.add('active'); remove.addEventListener('click', () => void toggleEntityFavorite(type, item)); actions.append(searchSongs, remove); row.append(cover, copy, actions); elements.entityList.append(row) }); if (!items.length) elements.entityList.append(createEntityEmpty(type === 'artists' ? '还没有收藏歌手' : '还没有收藏专辑')); replaceIcons()
+  items.forEach(item => { const row = document.createElement('article'); row.className = 'entity-row'; bindEntityOpen(row, item); const cover = document.createElement('div'); renderCover(cover, item.artworkUrl, 'entity'); const copy = document.createElement('div'); copy.className = 'entity-copy'; copy.append(Object.assign(document.createElement('strong'), { textContent: item.name }), Object.assign(document.createElement('span'), { textContent: entitySubtitle(item) })); const actions = document.createElement('div'); actions.className = 'entity-actions'; const open = makeIconButton('chevron-right', '查看详情'); open.addEventListener('click', () => void openEntityDetail(item)); const remove = makeIconButton('heart-off', '取消收藏'); remove.classList.add('active'); remove.addEventListener('click', () => void toggleEntityFavorite(type, item)); actions.append(open, remove); row.append(cover, copy, actions); elements.entityList.append(row) }); if (!items.length) elements.entityList.append(createEntityEmpty(type === 'artists' ? '还没有收藏歌手' : '还没有收藏专辑')); replaceIcons()
+}
+function captureDetailOrigin() {
+  if (state.entityDetail && ['artistDetail', 'albumDetail'].includes(state.view)) return { type: 'detail', item: state.entityDetail }
+  if (state.view === 'searchEntities') return { type: 'search', kind: state.searchType, title: elements.title.textContent, subtitle: elements.subtitle.textContent }
+  if (state.view === 'artists' || state.view === 'albums') return { type: 'library', libraryType: state.view }
+  return { type: 'library', libraryType: state.libraryType }
+}
+function renderDetailSummary(entity, result) {
+  elements.entityDetailSummary.classList.remove('hidden'); renderCover(elements.entityDetailCover, entity.artworkUrl, 'detail'); elements.entityDetailName.textContent = entity.name
+  const parts = [entity.source.toUpperCase(), `${state.tracks.length} 首歌曲`]
+  if (entity.kind === 'singer') parts.push(`${(result.albums || []).length} 张专辑`)
+  if (entity.artist && entity.artist !== entity.name) parts.push(entity.artist)
+  if (entity.publishTime) parts.push(String(entity.publishTime).slice(0, 10))
+  elements.entityDetailMeta.textContent = parts.join(' · '); elements.entityDetailDescription.textContent = result.entity?.description || ''
+}
+function renderRelatedAlbums(albums) {
+  elements.relatedAlbums.classList.remove('hidden'); elements.relatedAlbumCount.textContent = `${albums.length} 张`; elements.relatedAlbumList.replaceChildren()
+  albums.forEach(value => {
+    const album = normalizeEntity(value, 'album'); const button = document.createElement('button'); button.type = 'button'; button.className = 'album-card'; button.title = `打开专辑：${album.name}`
+    const cover = document.createElement('div'); cover.className = 'album-card-cover'; renderCover(cover, album.artworkUrl, 'album')
+    const copy = document.createElement('div'); copy.className = 'album-card-copy'; const detail = album.publishTime ? String(album.publishTime).slice(0, 10) : album.trackCount ? `${album.trackCount} 首` : album.artist
+    copy.append(Object.assign(document.createElement('strong'), { textContent: album.name }), Object.assign(document.createElement('span'), { textContent: detail || album.source.toUpperCase() }))
+    button.append(cover, copy); button.addEventListener('click', () => void openEntityDetail(album)); elements.relatedAlbumList.append(button)
+  })
+  if (!albums.length) elements.relatedAlbumList.append(Object.assign(document.createElement('span'), { className: 'entity-detail-empty', textContent: '暂无专辑信息' }))
+}
+async function openEntityDetail(item, pushHistory = true) {
+  if (!item?.id || !['singer', 'album'].includes(item.kind)) return showToast('缺少歌手或专辑信息', true)
+  if (pushHistory) state.detailHistory.push(captureDetailOrigin())
+  resetEntityDetailView(); state.entityDetail = item; state.view = item.kind === 'singer' ? 'artistDetail' : 'albumDetail'; showMode(state.view); elements.playlistActions.classList.add('hidden'); elements.title.textContent = item.name; elements.subtitle.textContent = '正在读取详情'; elements.trackList.replaceChildren(); state.tracks = []; setLoading(true)
+  try {
+    const result = await api.getEntityDetail({ kind: item.kind, id: item.id, source: item.source, name: item.name, artist: item.artist })
+    const entityData = result.entity || {}; const entity = normalizeEntity({ ...item, ...entityData, name: entityData.name || item.name, artist: entityData.artist || item.artist, artworkUrl: entityData.artworkUrl || item.artworkUrl, raw: item.raw }, item.kind)
+    state.entityDetail = entity; state.tracks = Array.isArray(result.songs) ? result.songs : []; elements.title.textContent = entity.name; elements.subtitle.textContent = `${entity.source.toUpperCase()} · ${state.tracks.length} 首歌曲`; renderDetailSummary(entity, result)
+    if (item.kind === 'singer') renderRelatedAlbums(Array.isArray(result.albums) ? result.albums : [])
+    renderTrackList()
+  } catch (error) {
+    const message = errorMessage(error); elements.subtitle.textContent = '详情读取失败'; state.tracks = []; renderTrackList(); showToast(message, true)
+  } finally { setLoading(false) }
+}
+function restoreEntityOrigin() {
+  const origin = state.detailHistory.pop()
+  if (!origin) return void openLibrary(state.entityDetail?.kind === 'album' ? 'albums' : 'artists')
+  if (origin.type === 'detail') return void openEntityDetail(origin.item, false)
+  if (origin.type === 'library') return void openLibrary(origin.libraryType, true)
+  resetEntityDetailView(); state.view = 'searchEntities'; showMode('searchEntities'); elements.title.textContent = origin.title; elements.subtitle.textContent = origin.subtitle; renderEntities(origin.kind, state.entities)
 }
 async function openLeaderboards() {
-  state.view = 'leaderboards'; state.boardId = null; setActiveNavigation('data-view', 'leaderboards'); showMode('leaderboards'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '排行榜'; elements.subtitle.textContent = '选择平台和榜单'; await loadBoards()
+  state.detailHistory = []; resetEntityDetailView(); state.view = 'leaderboards'; state.boardId = null; setActiveNavigation('data-view', 'leaderboards'); showMode('leaderboards'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '排行榜'; elements.subtitle.textContent = '选择平台和榜单'; await loadBoards()
 }
 async function loadBoards() {
   elements.leaderboardStatus.textContent = '正在读取...'; elements.leaderboardList.replaceChildren(); try { const result = await api.getLeaderboards(state.boardSource); state.boards = result?.list || result?.items || []; elements.leaderboardStatus.textContent = `${state.boards.length} 个榜单`; state.boards.forEach(board => { const button = document.createElement('button'); button.type = 'button'; button.className = 'board-item'; button.append(icon('list-music'), Object.assign(document.createElement('span'), { textContent: board.name || board.id })); button.addEventListener('click', () => void openLeaderboardTracks(board)); elements.leaderboardList.append(button) }); replaceIcons() } catch (error) { elements.leaderboardStatus.textContent = ''; showToast(errorMessage(error), true) }
 }
 async function openLeaderboardTracks(board) {
-  state.view = 'leaderboardTracks'; state.boardId = board.bangid || String(board.id || '').replace(`${state.boardSource}__`, ''); showMode('leaderboardTracks'); elements.title.textContent = board.name || '排行榜'; elements.playlistActions.classList.add('hidden'); setLoading(true)
+  resetEntityDetailView(); state.view = 'leaderboardTracks'; state.boardId = board.bangid || String(board.id || '').replace(`${state.boardSource}__`, ''); showMode('leaderboardTracks'); elements.title.textContent = board.name || '排行榜'; elements.playlistActions.classList.add('hidden'); setLoading(true)
   try { const result = await api.getLeaderboardTracks({ source: state.boardSource, boardId: state.boardId, page: 1 }); state.tracks = result.items || []; elements.subtitle.textContent = `${state.boardSource.toUpperCase()} · ${state.tracks.length} 首歌曲`; renderTrackList() } catch (error) { showToast(errorMessage(error), true) } finally { setLoading(false) }
 }
-function openAbout() { state.view = 'about'; setActiveNavigation('data-view', 'about'); showMode('about'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '关于'; elements.subtitle.textContent = '客户端信息' }
+function openAbout() { state.detailHistory = []; resetEntityDetailView(); state.view = 'about'; setActiveNavigation('data-view', 'about'); showMode('about'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '关于'; elements.subtitle.textContent = '客户端信息' }
 function playFromTracks(sourceTrack) { const index = state.tracks.indexOf(sourceTrack); state.queue = state.tracks.slice(); state.queueIndex = Math.max(0, index); saveQueue(); renderQueue(); void playAt(state.queueIndex) }
 async function playAt(index) {
   if (!state.queue.length || state.resolving) return; const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length; state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; renderNowPlaying(); renderQueue(); renderTrackList(); elements.nowArtist.textContent = '正在获取播放地址...'
@@ -201,6 +281,7 @@ elements.searchTypes.forEach(button => button.addEventListener('click', () => { 
 elements.sourceTabs.forEach(button => button.addEventListener('click', () => { state.searchSource = button.dataset.source; elements.sourceTabs.forEach(item => item.classList.toggle('active', item === button)); if (elements.searchInput.value.trim()) void search() }))
 document.querySelector('[data-view="search"]').addEventListener('click', openSearch); document.querySelector('[data-view="leaderboards"]').addEventListener('click', () => void openLeaderboards()); document.querySelector('[data-view="artists"]').addEventListener('click', () => void openLibrary('artists')); document.querySelector('[data-view="albums"]').addEventListener('click', () => void openLibrary('albums')); document.querySelector('[data-playlist="love"]').addEventListener('click', () => void openPlaylist('love')); document.querySelector('[data-view="about"]').addEventListener('click', openAbout)
 elements.syncCenter.addEventListener('click', () => api.openSyncCenter()); elements.libraryRefresh.addEventListener('click', () => void openLibrary(state.libraryType)); elements.leaderboardSource.addEventListener('change', () => { state.boardSource = elements.leaderboardSource.value; void loadBoards() })
+elements.entityDetailBack.addEventListener('click', restoreEntityOrigin)
 elements.createPlaylist.addEventListener('click', async () => { const name = window.prompt('请输入歌单名称')?.trim(); if (!name) return; try { const created = await api.createPlaylist(name); await refreshPlaylists(); await openPlaylist(created.id) } catch (error) { showToast(errorMessage(error), true) } })
 elements.renamePlaylist.addEventListener('click', async () => { const current = state.playlists.find(item => item.id === state.playlistId); const name = window.prompt('请输入新的歌单名称', current?.name || '')?.trim(); if (!name || name === current?.name) return; try { await api.renamePlaylist(state.playlistId, name); await refreshPlaylists(); await openPlaylist(state.playlistId); showToast('歌单已重命名') } catch (error) { showToast(errorMessage(error), true) } })
 elements.deletePlaylist.addEventListener('click', async () => { const current = state.playlists.find(item => item.id === state.playlistId); if (!current || !window.confirm(`删除歌单“${current.name}”？`)) return; try { await api.deletePlaylist(current.id); await refreshPlaylists(); await openPlaylist('love'); showToast('歌单已删除') } catch (error) { showToast(errorMessage(error), true) } })

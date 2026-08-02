@@ -80,6 +80,15 @@
       </section>
 
       <section id="tracks-view" class="view tracks-view">
+        <div id="entity-detail-summary" class="entity-detail-summary hidden">
+          <button id="entity-detail-back" class="icon-button" type="button" title="返回" aria-label="返回"><i data-lucide="arrow-left"></i></button>
+          <div id="entity-detail-cover" class="entity-detail-cover"><i data-lucide="music-2"></i></div>
+          <div class="entity-detail-copy"><strong id="entity-detail-name"></strong><span id="entity-detail-meta"></span><p id="entity-detail-description"></p></div>
+        </div>
+        <section id="related-albums" class="related-albums hidden">
+          <header><strong>专辑</strong><span id="related-album-count"></span></header>
+          <div id="related-album-list" class="related-album-list"></div>
+        </section>
         <div id="tracks-toolbar" class="tracks-toolbar hidden"><button id="play-all" class="primary-button" type="button"><i data-lucide="play"></i>播放全部</button></div>
         <div class="track-columns" aria-hidden="true"><span>歌曲</span><span>专辑</span><span>平台</span><span>时长</span><span></span></div>
         <div id="track-list" class="track-list"></div>

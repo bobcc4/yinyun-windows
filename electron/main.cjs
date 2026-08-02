@@ -530,6 +530,9 @@ function registerIpc() {
   ipcMain.handle('player:get-leaderboard-tracks', (_event, options = {}) => requireApi().getLeaderboardTracks(options.source || 'tx', options.boardId, options.page || 1))
   ipcMain.handle('player:get-library', (_event, type) => requireApi().getLibrary(type))
   ipcMain.handle('player:save-library', (_event, value) => requireApi().saveLibrary(value.type, value.items))
+  ipcMain.handle('player:get-entity-detail', (_event, value = {}) => requireApi().getEntityDetail(
+    value.kind, value.id, value.source || 'tx', { name: value.name, artist: value.artist },
+  ))
   ipcMain.handle('player:choose-download-directory', chooseDownloadDirectory)
   ipcMain.handle('player:download-track', (event, value) => downloadTrackLocally(event.sender, value))
   ipcMain.handle('client:backup', async () => ({ success: true, ...(await pullSnapshot()) }))

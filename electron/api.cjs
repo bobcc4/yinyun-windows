@@ -166,6 +166,13 @@ function createApiClient(fetchImpl, serverUrl) {
     saveLibrary(type, items) {
       return authenticatedRequest(`/api/v1/library/${type}`, { method: 'PUT', body: { items } })
     },
+    getEntityDetail(kind, id, source = 'tx', context = {}) {
+      const collection = kind === 'singer' ? 'artists' : 'albums'
+      const params = new URLSearchParams({ source })
+      if (context.name) params.set('name', context.name)
+      if (context.artist) params.set('artist', context.artist)
+      return authenticatedRequest(`/api/v1/${collection}/${encodeURIComponent(id)}?${params}`)
+    },
   }
 }
 

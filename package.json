@@ -1,6 +1,6 @@
 {
   "name": "yinyun-windows",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "连接音云服务器的 Windows 音乐播放器，支持排行榜、本地下载、收藏、歌单和数据同步恢复",
   "main": "electron/main.cjs",
   "private": true,
