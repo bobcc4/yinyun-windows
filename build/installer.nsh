@@ -1,3 +1,14 @@
+!macro customInit
+  ReadRegStr $R0 HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
+  ${If} $R0 != ""
+    MessageBox MB_YESNO|MB_ICONINFORMATION \
+      "检测到已安装音云 Windows 客户端 v$R0。无需卸载，直接覆盖升级会保留登录、设置和下载记录。是否继续？" \
+      IDYES continueUpgrade
+    Abort
+    continueUpgrade:
+  ${EndIf}
+!macroend
+
 !macro customUnInstall
   ${ifNot} ${isUpdated}
     Delete "$APPDATA\${APP_FILENAME}\account.json"

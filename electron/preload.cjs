@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('yinyunClient', {
   getLeaderboards: source => ipcRenderer.invoke('player:get-leaderboards', source),
   getLeaderboardTracks: options => ipcRenderer.invoke('player:get-leaderboard-tracks', options),
   getLibrary: type => ipcRenderer.invoke('player:get-library', type),
+  getLibraryTracks: options => ipcRenderer.invoke('player:get-library-tracks', options),
   saveLibrary: (type, items) => ipcRenderer.invoke('player:save-library', { type, items }),
   getEntityDetail: options => ipcRenderer.invoke('player:get-entity-detail', options),
   chooseDownloadDirectory: () => ipcRenderer.invoke('player:choose-download-directory'),

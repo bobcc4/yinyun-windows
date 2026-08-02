@@ -15,12 +15,21 @@
         <div><strong>音云</strong><span>Windows 客户端</span></div>
       </div>
 
-      <nav class="main-nav" aria-label="主要功能">
+      <div class="nav-section-label">发现</div>
+      <nav class="main-nav" aria-label="发现">
         <button class="nav-item" type="button" data-view="search"><i data-lucide="search"></i><span>搜索</span></button>
         <button class="nav-item" type="button" data-view="leaderboards"><i data-lucide="trophy"></i><span>排行榜</span></button>
-        <button class="nav-item" type="button" data-view="artists"><i data-lucide="mic-2"></i><span>收藏歌手</span></button>
-        <button class="nav-item" type="button" data-view="albums"><i data-lucide="disc-3"></i><span>收藏专辑</span></button>
+      </nav>
+      <div class="nav-section-label">音乐库</div>
+      <nav class="main-nav" aria-label="音乐库">
+        <button class="nav-item" type="button" data-view="songs"><i data-lucide="music"></i><span>歌曲</span></button>
+        <button class="nav-item" type="button" data-view="albums"><i data-lucide="disc-3"></i><span>专辑</span></button>
+        <button class="nav-item" type="button" data-view="artists"><i data-lucide="mic-2"></i><span>艺术家</span></button>
+      </nav>
+      <div class="nav-section-label">个人</div>
+      <nav class="main-nav" aria-label="个人">
         <button class="nav-item active" type="button" data-playlist="love"><i data-lucide="heart"></i><span>我喜欢的音乐</span></button>
+        <button class="nav-item" type="button" data-view="downloads"><i data-lucide="circle-down"></i><span>下载管理</span></button>
       </nav>
 
       <div class="playlist-heading">
@@ -38,11 +47,8 @@
 
     <section class="content">
       <header class="content-header">
+        <button id="nav-back" class="icon-button subtle nav-back" type="button" title="返回上一步" aria-label="返回上一步" disabled><i data-lucide="arrow-left"></i></button>
         <div class="heading-copy"><h1 id="view-title">我喜欢的音乐</h1><p id="view-subtitle">0 首歌曲</p></div>
-        <div id="playlist-actions" class="header-actions hidden">
-          <button id="rename-playlist" class="icon-button" type="button" title="重命名歌单" aria-label="重命名歌单"><i data-lucide="pencil"></i></button>
-          <button id="delete-playlist" class="icon-button danger" type="button" title="删除歌单" aria-label="删除歌单"><i data-lucide="trash-2"></i></button>
-        </div>
       </header>
 
       <section id="search-view" class="view hidden">
@@ -75,22 +81,31 @@
       </section>
 
       <section id="library-view" class="view hidden library-view">
-        <div id="library-toolbar" class="library-toolbar"><span id="library-kind-label"></span><button id="library-refresh" class="secondary-button" type="button"><i data-lucide="refresh-cw"></i>刷新</button></div>
+        <div id="library-toolbar" class="library-toolbar"><div><select id="library-sort" aria-label="排序方式"><option value="recent">最近添加</option><option value="released">最近发行</option></select><span id="library-kind-label"></span></div><button id="library-refresh" class="icon-button subtle" type="button" title="刷新" aria-label="刷新"><i data-lucide="refresh-cw"></i></button></div>
         <div id="entity-list" class="entity-list"></div>
       </section>
 
+      <section id="downloads-view" class="view hidden downloads-view">
+        <div class="downloads-toolbar"><span id="downloads-summary">暂无下载记录</span><button id="open-download-directory" class="secondary-button" type="button"><i data-lucide="folder-open"></i>设置下载目录</button></div>
+        <div id="downloads-list" class="downloads-list"></div>
+      </section>
+
       <section id="tracks-view" class="view tracks-view">
+        <section id="playlist-hero" class="playlist-hero hidden">
+          <div id="playlist-cover" class="playlist-cover"><i data-lucide="list-music"></i></div>
+          <div class="playlist-hero-copy"><span>歌单</span><h2 id="playlist-name"></h2><p id="playlist-meta"></p><div id="playlist-actions" class="playlist-hero-actions"><button id="hero-play-all" class="primary-button" type="button"><i data-lucide="play"></i>播放全部</button><button id="hero-shuffle" class="action-button" type="button"><i data-lucide="shuffle"></i>随机播放</button><button id="playlist-select" class="icon-button subtle" type="button" title="选择歌曲" aria-label="选择歌曲"><i data-lucide="list-checks"></i></button><button id="rename-playlist" class="icon-button subtle" type="button" title="编辑歌单" aria-label="编辑歌单"><i data-lucide="pencil"></i></button><button id="delete-playlist" class="icon-button subtle danger" type="button" title="删除歌单" aria-label="删除歌单"><i data-lucide="trash-2"></i></button></div></div>
+        </section>
         <div id="entity-detail-summary" class="entity-detail-summary hidden">
-          <button id="entity-detail-back" class="icon-button" type="button" title="返回" aria-label="返回"><i data-lucide="arrow-left"></i></button>
           <div id="entity-detail-cover" class="entity-detail-cover"><i data-lucide="music-2"></i></div>
-          <div class="entity-detail-copy"><strong id="entity-detail-name"></strong><span id="entity-detail-meta"></span><p id="entity-detail-description"></p></div>
+          <div class="entity-detail-copy"><span id="entity-detail-kind"></span><strong id="entity-detail-name"></strong><span id="entity-detail-meta"></span><p id="entity-detail-description"></p><div class="entity-detail-actions"><button id="entity-play-all" class="primary-button" type="button"><i data-lucide="play"></i>播放全部</button><button id="entity-shuffle" class="action-button" type="button"><i data-lucide="shuffle"></i>随机播放</button><button id="entity-favorite" class="icon-button subtle" type="button" title="收藏" aria-label="收藏"><i data-lucide="heart"></i></button><button id="entity-select" class="icon-button subtle" type="button" title="选择歌曲" aria-label="选择歌曲"><i data-lucide="list-checks"></i></button></div></div>
         </div>
+        <div id="entity-tabs" class="entity-tabs hidden"><button type="button" data-entity-tab="albums">专辑</button><button type="button" data-entity-tab="songs">歌曲</button></div>
         <section id="related-albums" class="related-albums hidden">
           <header><strong>专辑</strong><span id="related-album-count"></span></header>
           <div id="related-album-list" class="related-album-list"></div>
         </section>
-        <div id="tracks-toolbar" class="tracks-toolbar hidden"><button id="play-all" class="primary-button" type="button"><i data-lucide="play"></i>播放全部</button></div>
-        <div class="track-columns" aria-hidden="true"><span>歌曲</span><span>专辑</span><span>平台</span><span>时长</span><span></span></div>
+        <div id="tracks-toolbar" class="tracks-toolbar hidden"><div class="toolbar-left"><button id="track-select" class="icon-button subtle" type="button" title="选择歌曲" aria-label="选择歌曲"><i data-lucide="list-checks"></i></button><select id="track-sort" aria-label="歌曲排序"><option value="recent">最近添加</option><option value="lastPlayed">最近播放</option><option value="mostPlayed">最常播放</option></select><span id="selection-summary" class="selection-summary hidden"></span></div><div class="toolbar-right"><button id="play-all" class="primary-button" type="button"><i data-lucide="play"></i>播放全部</button><button id="shuffle-all" class="action-button" type="button"><i data-lucide="shuffle"></i>随机播放</button></div></div>
+        <div class="track-columns" aria-hidden="true"><span>歌曲</span><span>时长</span><span></span></div>
         <div id="track-list" class="track-list"></div>
         <div id="empty-state" class="empty-state"><i data-lucide="music-2"></i><strong>这里还没有歌曲</strong><span>搜索音乐，或从歌单中选择歌曲</span></div>
         <div id="loading-state" class="loading-state hidden"><span></span>正在读取音乐</div>
@@ -110,9 +125,9 @@
 
     <section id="lyrics-view" class="lyrics-view hidden" aria-hidden="true">
       <div id="lyrics-backdrop" class="lyrics-backdrop"></div>
-      <header><span>正在播放</span><button id="close-lyrics" class="icon-button" type="button" title="关闭歌词" aria-label="关闭歌词"><i data-lucide="chevron-down"></i></button></header>
+      <header><button id="close-lyrics" class="icon-button subtle" type="button" title="收起歌词" aria-label="收起歌词"><i data-lucide="chevron-down"></i></button><span>正在播放</span></header>
       <div class="lyrics-layout">
-        <div id="lyrics-cover" class="lyrics-cover"><i data-lucide="music-2"></i></div>
+        <button id="lyrics-cover" class="lyrics-cover" type="button" title="收起歌词" aria-label="收起歌词"><i data-lucide="music-2"></i></button>
         <div class="lyrics-copy"><h2 id="lyrics-title">尚未播放</h2><p id="lyrics-artist">-</p><div id="lyrics-content" class="lyrics-content"><p>暂无歌词</p></div></div>
       </div>
     </section>
@@ -123,7 +138,8 @@
       <div class="player-tools"><select id="quality" title="播放和下载音质" aria-label="播放和下载音质"><option value="128k">标准音质</option><option value="320k">高音质</option><option value="flac">无损音质</option><option value="flac24bit">24bit 无损</option><option value="hires">高解析度</option><option value="atmos">空间音频</option><option value="atmos_plus">增强空间音频</option><option value="master">母带音质</option></select><button id="download-directory" class="icon-button subtle" type="button" title="设置 Windows 下载目录" aria-label="设置 Windows 下载目录"><i data-lucide="folder-down"></i></button><i data-lucide="volume-2" class="volume-icon"></i><input id="volume" type="range" min="0" max="100" value="80" aria-label="音量"><button id="queue-toggle" class="icon-button subtle" type="button" title="播放队列" aria-label="播放队列"><i data-lucide="list-music"></i></button></div>
     </footer>
   </main>
+  <dialog id="text-dialog" class="text-dialog"><form method="dialog"><h2 id="text-dialog-title"></h2><input id="text-dialog-input" type="text" maxlength="100" autocomplete="off"><div><button id="text-dialog-cancel" class="action-button" type="button">取消</button><button id="text-dialog-confirm" class="primary-button" type="submit" value="confirm">确认</button></div></form></dialog>
   <div id="playlist-menu" class="popover hidden" role="menu"></div><div id="toast" class="toast hidden" role="status"></div><audio id="audio" preload="metadata"></audio>
-  <script src="../node_modules/lucide/dist/umd/lucide.js"></script><script src="track-identity.js"></script><script src="player.js"></script>
+  <script src="../node_modules/lucide/dist/umd/lucide.js"></script><script src="track-identity.js"></script><script src="lyrics.js"></script><script src="player.js"></script>
 </body>
 </html>

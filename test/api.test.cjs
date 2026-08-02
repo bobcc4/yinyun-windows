@@ -137,3 +137,23 @@ test('uses leaderboard, entity library, and extended search routes', async () =>
   assert.equal(calls[6].options.method, 'PUT')
   assert.deepEqual(JSON.parse(calls[6].options.body), { items: [{ id: 'tx_artist', name: '歌手', source: 'tx' }] })
 })
+
+test('uses a short-lived stream token for local library playback', async () => {
+  const calls = []
+  const client = createApiClient(async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/auth/login')) return response(200, { data: { accessToken: 'access', refreshToken: 'refresh' } })
+    if (url.includes('/library/tracks?')) return response(200, { data: { items: [{ id: 'local', artworkUrl: '/api/v1/library/tracks/local/cover?token=cover' }], total: 1 } })
+    if (url.endsWith('/stream-token')) return response(200, { data: { path: '/api/v1/library/tracks/local/stream?token=media' } })
+    throw new Error(`Unexpected request: ${url}`)
+  }, 'https://music.example.com/base')
+  await client.login('admin', 'password')
+  const library = await client.getLibraryTracks(1, 500, '心跳')
+  const resolved = await client.resolveTrack({ id: 'local', streamPath: '/stream', quality: 'master', source: 'tx' }, 'flac')
+  assert.match(calls[1].url, /query=%E5%BF%83%E8%B7%B3/)
+  assert.equal(library.items[0].artworkUrl, 'https://music.example.com/api/v1/library/tracks/local/cover?token=cover')
+  assert.equal(calls[2].options.method, 'POST')
+  assert.equal(resolved.url, 'https://music.example.com/api/v1/library/tracks/local/stream?token=media')
+  assert.equal(resolved.quality, 'master')
+  assert.equal(resolved.local, true)
+})

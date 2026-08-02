@@ -421,7 +421,9 @@ async function chooseDownloadDirectory() {
 
 async function downloadTrackLocally(sender, value = {}) {
   if (!apiClient || !currentAccount) throw new Error('请先登录同步账户')
-  const track = trackForDownload(value.track || value)
+  const inputTrack = value.track || value
+  const track = trackForDownload(inputTrack)
+  const downloadId = String(value.track?.localTrackId || value.track?.id || track.id || track.songmid || track.hash || Date.now())
   const quality = value.quality || configStore.read().playbackQuality
   let directory = configStore.read().downloadDirectory
   if (!directory) {
@@ -429,7 +431,7 @@ async function downloadTrackLocally(sender, value = {}) {
     if (!selected.success) return selected
     directory = selected.directory
   }
-  const resolved = await apiClient.resolveTrack(track, quality)
+  const resolved = await apiClient.resolveTrack(inputTrack, quality)
   const normalized = trackForDownload(resolved.track || track)
   const actualQuality = resolved.quality || quality
   const response = await net.fetch(resolved.url, { redirect: 'follow' })
@@ -450,7 +452,7 @@ async function downloadTrackLocally(sender, value = {}) {
       const now = Date.now()
       if (now - lastProgressAt >= 250) {
         lastProgressAt = now
-        sender.send('player:download-progress', { status: 'downloading', title: parts.title, received, total, path: targetPath })
+        sender.send('player:download-progress', { id: downloadId, status: 'downloading', title: parts.title, artist: parts.artist, album: parts.album, quality: actualQuality, source: resolved.actualSource || track.source, received, total, path: targetPath })
       }
       callback(null, chunk)
     },
@@ -460,10 +462,10 @@ async function downloadTrackLocally(sender, value = {}) {
     await fs.promises.rename(temporaryPath, targetPath)
   } catch (error) {
     await fs.promises.rm(temporaryPath, { force: true })
-    sender.send('player:download-progress', { status: 'failed', title: parts.title, received, total, path: targetPath })
+    sender.send('player:download-progress', { id: downloadId, status: 'failed', title: parts.title, artist: parts.artist, album: parts.album, quality: actualQuality, source: resolved.actualSource || track.source, received, total, path: targetPath, error: error.message })
     throw error
   }
-  sender.send('player:download-progress', { status: 'completed', title: parts.title, received, total, path: targetPath })
+  sender.send('player:download-progress', { id: downloadId, status: 'completed', title: parts.title, artist: parts.artist, album: parts.album, quality: actualQuality, source: resolved.actualSource || track.source, received, total, path: targetPath })
   return { success: true, path: targetPath, quality: resolved.quality, source: resolved.actualSource }
 }
 
@@ -537,6 +539,7 @@ function registerIpc() {
   ipcMain.handle('player:get-leaderboards', (_event, source) => requireApi().getLeaderboards(source || 'tx'))
   ipcMain.handle('player:get-leaderboard-tracks', (_event, options = {}) => requireApi().getLeaderboardTracks(options.source || 'tx', options.boardId, options.page || 1))
   ipcMain.handle('player:get-library', (_event, type) => requireApi().getLibrary(type))
+  ipcMain.handle('player:get-library-tracks', (_event, options = {}) => requireApi().getLibraryTracks(options.page || 1, options.limit || 500, String(options.query || '').trim()))
   ipcMain.handle('player:save-library', (_event, value) => requireApi().saveLibrary(value.type, value.items))
   ipcMain.handle('player:get-entity-detail', (_event, value = {}) => requireApi().getEntityDetail(
     value.kind, value.id, value.source || 'tx', { name: value.name, artist: value.artist },

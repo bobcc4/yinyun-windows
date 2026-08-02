@@ -29,6 +29,14 @@ async function parseJsonResponse(response) {
 function createApiClient(fetchImpl, serverUrl) {
   let session = null
 
+  function normalizeMediaTrack(track) {
+    if (!track || typeof track !== 'object') return track
+    const artworkUrl = typeof track.artworkUrl === 'string' && track.artworkUrl.startsWith('/')
+      ? new URL(track.artworkUrl, `${serverUrl}/`).href
+      : track.artworkUrl
+    return { ...track, artworkUrl }
+  }
+
   async function request(pathname, options = {}) {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), options.timeoutMs || REQUEST_TIMEOUT_MS)
@@ -112,6 +120,18 @@ function createApiClient(fetchImpl, serverUrl) {
       return authenticatedRequest(`/api/v1/search?${params}`)
     },
     resolveTrack(track, quality = 'flac') {
+      const localTrackId = track && (track.localTrackId || (track.streamPath && track.id))
+      if (localTrackId) {
+        return authenticatedRequest(`/api/v1/library/tracks/${encodeURIComponent(localTrackId)}/stream-token`, {
+          method: 'POST',
+        }).then(media => ({
+          url: new URL(media.path, `${serverUrl}/`).href,
+          track,
+          quality: track.quality || quality,
+          actualSource: track.source || track.downloadSource || 'local',
+          local: true,
+        }))
+      }
       return authenticatedRequest('/api/v1/tracks/resolve', {
         method: 'POST',
         timeoutMs: 45_000,
@@ -131,7 +151,10 @@ function createApiClient(fetchImpl, serverUrl) {
       return authenticatedRequest('/api/v1/playlists')
     },
     getPlaylist(id) {
-      return authenticatedRequest(`/api/v1/playlists/${encodeURIComponent(id)}`)
+      return authenticatedRequest(`/api/v1/playlists/${encodeURIComponent(id)}`).then(value => ({
+        ...value,
+        items: Array.isArray(value?.items) ? value.items.map(normalizeMediaTrack) : [],
+      }))
     },
     createPlaylist(name) {
       return authenticatedRequest('/api/v1/playlists', { method: 'POST', body: { name } })
@@ -162,6 +185,14 @@ function createApiClient(fetchImpl, serverUrl) {
     },
     getLibrary(type) {
       return authenticatedRequest(`/api/v1/library/${type}`)
+    },
+    getLibraryTracks(page = 1, limit = 500, query = '') {
+      const params = new URLSearchParams({ page: String(page), limit: String(limit) })
+      if (query) params.set('query', query)
+      return authenticatedRequest(`/api/v1/library/tracks?${params}`).then(value => ({
+        ...value,
+        items: Array.isArray(value?.items) ? value.items.map(normalizeMediaTrack) : [],
+      }))
     },
     saveLibrary(type, items) {
       return authenticatedRequest(`/api/v1/library/${type}`, { method: 'PUT', body: { items } })
