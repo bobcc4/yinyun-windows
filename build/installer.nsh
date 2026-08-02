@@ -1,3 +1,13 @@
+; electron-builder's assisted installer normally appends APP_FILENAME after
+; the directory page. Treat the selected path as the exact final directory.
+!ifdef allowToChangeInstallationDirectory
+  !undef allowToChangeInstallationDirectory
+!endif
+
+!macro customPageAfterChangeDir
+  !insertmacro MUI_PAGE_DIRECTORY
+!macroend
+
 !macro customInit
   ReadRegStr $R0 HKCU "${UNINSTALL_REGISTRY_KEY}" "DisplayVersion"
   ${If} $R0 != ""
