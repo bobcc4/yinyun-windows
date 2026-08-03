@@ -154,7 +154,7 @@ function playCollection(shuffle = false) { const tracks = selectedOrAllTracks();
 function icon(name) { const item = document.createElement('i'); item.dataset.lucide = name; return item }
 function replaceIcons() { window.lucide?.createIcons({ attrs: { 'aria-hidden': 'true' } }) }
 function setButtonIcon(button, name) { button.replaceChildren(icon(name)); replaceIcons() }
-function errorMessage(error) { return error?.message || String(error || '操作失败') }
+function errorMessage(error) { return window.yinyunErrors?.friendlyErrorMessage(error) || error?.message || String(error || '操作失败') }
 function showToast(message, error = false) {
   clearTimeout(state.toastTimer); elements.toast.textContent = message; elements.toast.className = `toast${error ? ' error' : ''}`
   state.toastTimer = setTimeout(() => elements.toast.classList.add('hidden'), error ? 5000 : 3000)

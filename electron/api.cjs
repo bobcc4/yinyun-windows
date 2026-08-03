@@ -26,6 +26,22 @@ async function parseJsonResponse(response) {
   return unwrapResponse(body)
 }
 
+function normalizeTrackRequest(track) {
+  if (!track || typeof track !== 'object') return track
+  const raw = track.raw && typeof track.raw === 'object' ? track.raw : {}
+  const first = (...values) => values.find(value => value !== undefined && value !== null && value !== '')
+  return {
+    ...raw,
+    ...track,
+    source: first(track.source, raw.source),
+    name: first(track.name, raw.name, track.title, raw.title),
+    singer: first(track.singer, raw.singer, track.artist, raw.artist),
+    albumName: first(track.albumName, raw.albumName, track.album, raw.album),
+    interval: first(track.interval, raw.interval, track.duration, raw.duration),
+    songmid: first(track.songmid, raw.songmid, raw.songId),
+  }
+}
+
 function createApiClient(fetchImpl, serverUrl) {
   let session = null
 
@@ -136,7 +152,7 @@ function createApiClient(fetchImpl, serverUrl) {
         method: 'POST',
         timeoutMs: 45_000,
         body: {
-          track,
+          track: normalizeTrackRequest(track),
           quality,
           allowQualityFallback: true,
           allowPlatformSwitch: true,
@@ -207,4 +223,4 @@ function createApiClient(fetchImpl, serverUrl) {
   }
 }
 
-module.exports = { createApiClient, parseJsonResponse, unwrapResponse }
+module.exports = { createApiClient, normalizeTrackRequest, parseJsonResponse, unwrapResponse }

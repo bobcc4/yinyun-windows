@@ -2,7 +2,7 @@
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { createApiClient } = require('../electron/api.cjs')
+const { createApiClient, normalizeTrackRequest } = require('../electron/api.cjs')
 
 function response(status, value) {
   return { ok: status >= 200 && status < 300, status, json: async () => value }
@@ -86,6 +86,54 @@ test('uses authenticated player and playlist API routes', async () => {
     allowSourceSwitch: true,
   })
   assert.equal(calls[5].options.method, 'DELETE')
+})
+
+test('canonicalizes API track wrappers before resolving playback', () => {
+  const raw = {
+    songmid: 1301736461,
+    name: '爱错',
+    singer: '王力宏',
+    albumName: '恋爱占星音乐全精选',
+    source: 'wy',
+    interval: '03:58',
+  }
+  const normalized = normalizeTrackRequest({
+    id: 'wy_1301736461',
+    title: '爱错',
+    artist: '王力宏',
+    album: '恋爱占星音乐全精选',
+    source: 'wy',
+    duration: '03:58',
+    raw,
+  })
+
+  assert.equal(normalized.name, '爱错')
+  assert.equal(normalized.singer, '王力宏')
+  assert.equal(normalized.albumName, '恋爱占星音乐全精选')
+  assert.equal(normalized.interval, '03:58')
+  assert.equal(normalized.songmid, 1301736461)
+  assert.equal(normalized.source, 'wy')
+})
+
+test('sends canonical wrapper fields in the online resolve request', async () => {
+  const calls = []
+  const client = createApiClient(async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/auth/login')) return response(200, { data: { accessToken: 'access', refreshToken: 'refresh' } })
+    if (url.endsWith('/tracks/resolve')) return response(200, { data: { url: 'https://media.example/song.flac' } })
+    throw new Error(`Unexpected request: ${url}`)
+  }, 'https://music.example.com')
+  await client.login('admin', 'password')
+  await client.resolveTrack({
+    id: 'wy_1301736461', title: '爱错', artist: '王力宏', source: 'wy', duration: '03:58',
+    raw: { songmid: 1301736461, name: '爱错', singer: '王力宏', source: 'wy', interval: '03:58' },
+  }, 'flac')
+
+  const body = JSON.parse(calls[1].options.body)
+  assert.equal(body.track.name, '爱错')
+  assert.equal(body.track.singer, '王力宏')
+  assert.equal(body.track.songmid, 1301736461)
+  assert.equal(body.track.interval, '03:58')
 })
 
 test('refreshes expired sessions for player API requests', async () => {
