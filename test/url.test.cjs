@@ -53,3 +53,7 @@ test('validates API v1 capabilities', () => {
   })
   assert.throws(() => readCapabilities({ data: { product: 'other' } }), /API v1/)
 })
+
+test('accepts the unified API capability version', () => {
+  assert.equal(readCapabilities({ data: { product: 'yinyun', apiVersion: '1.4.0', serverVersion: '1.4.0', playerPath: '/music' } }).apiVersion, '1.4.0')
+})

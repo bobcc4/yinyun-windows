@@ -27,6 +27,7 @@ const { compareVersions, isReleaseUrl, LATEST_RELEASE_API, parseLatestRelease } 
 const REQUEST_TIMEOUT_MS = 12_000
 const SNAPSHOT_INTERVAL_MS = 30_000
 const APP_REPOSITORY = 'https://github.com/bobcc4/yinyun-windows'
+const MIN_SERVER_API_VERSION = '1.4.0'
 
 app.setName('音云')
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -118,6 +119,9 @@ async function discoverServer(input) {
   const raw = await response.json()
   const capabilities = readCapabilities(raw)
   const data = raw && raw.data ? raw.data : raw
+  if (compareVersions(capabilities.apiVersion, MIN_SERVER_API_VERSION) < 0) {
+    throw new Error(`服务端 API 版本过低，需要 ${MIN_SERVER_API_VERSION} 或更高版本`)
+  }
   if (!data.features || !data.features.accountSync || data.features.accountSync.restore !== true) {
     throw new Error('服务端版本过旧，不支持账户同步恢复')
   }
