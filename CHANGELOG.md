@@ -1,3 +1,10 @@
+## v1.1.0 (2026-08-09)
+
+### Breaking Upgrade
+
+- The Windows client now uses the unified Yinyun '/api/v1' contract.
+- Requires server API '1.4.0' or later; older servers and clients are not compatible.
+
 # Changelog
 
 ## v1.0.5 (2026-08-04)
