@@ -205,3 +205,18 @@ test('uses a short-lived stream token for local library playback', async () => {
   assert.equal(resolved.quality, 'master')
   assert.equal(resolved.local, true)
 })
+
+test('can bypass a local FLAC stream when a cast target requires online MP3', async () => {
+  const calls = []
+  const client = createApiClient(async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/auth/login')) return response(200, { data: { accessToken: 'access', refreshToken: 'refresh' } })
+    if (url.endsWith('/tracks/resolve')) return response(200, { data: { url: 'https://media.example/song.mp3', quality: '320k' } })
+    throw new Error(`Unexpected request: ${url}`)
+  }, 'https://music.example.com')
+  await client.login('admin', 'password')
+  const result = await client.resolveTrack({ id: 'local-1', localTrackId: 'local-1', source: 'tx', songmid: 'song-1' }, '320k', { preferOnline: true })
+  assert.equal(result.url, 'https://media.example/song.mp3')
+  assert.equal(calls[1].url, 'https://music.example.com/api/v1/tracks/resolve')
+  assert.equal(JSON.parse(calls[1].options.body).quality, '320k')
+})

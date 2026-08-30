@@ -110,6 +110,26 @@ h1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 
 .about-update { padding: 4px 8px; border-radius: 4px; color: #fff; background: #d14b5d; font-size: 11px; font-weight: 650; }
 .about-update:hover { background: #b83c4e; }
 
+.xiaoai-view { min-height: 0; flex: 1; overflow: auto; padding: 28px; }
+.xiaoai-view:not(.hidden) { display: block; }
+.xiaoai-panel { width: min(760px, 100%); margin: 0 auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.xiaoai-panel > header { min-height: 86px; display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.xiaoai-panel h2 { font-size: 18px; }
+.xiaoai-panel header p, .xiaoai-copy span { margin-top: 5px; color: var(--muted); font-size: 12px; }
+.xiaoai-state { flex: 0 0 auto; padding: 4px 8px; border-radius: 4px; color: #6f7d76; background: #edf2ef; font-size: 11px; font-weight: 700; }
+.xiaoai-state.connected { color: #126347; background: #e3f4ec; }
+.xiaoai-section { display: grid; gap: 16px; padding: 22px; border-bottom: 1px solid var(--line); }
+.xiaoai-section:last-child { border-bottom: 0; }
+.xiaoai-copy { display: flex; flex-direction: column; }
+.xiaoai-qr-wrap { display: flex; align-items: center; gap: 18px; padding: 14px; border: 1px solid #dbe5e0; border-radius: 7px; background: #f8faf9; }
+.xiaoai-qr-wrap img { width: 220px; height: 220px; object-fit: contain; background: #fff; }
+.xiaoai-qr-wrap span { color: #56665e; font-size: 12px; }
+.xiaoai-device-row, .xiaoai-actions { display: flex; align-items: center; gap: 10px; }
+.xiaoai-device-row select { min-width: 280px; height: 38px; padding: 0 10px; border: 1px solid #cbd7d1; border-radius: 6px; color: #33463d; background: #fff; }
+.xiaoai-actions { padding-top: 4px; }
+#cast-toggle.active { color: #fff; background: var(--green); }
+#cast-toggle.active:hover { background: var(--green-dark); }
+
 .detail-panel { position: fixed; z-index: 20; top: 0; right: 0; bottom: var(--bar-height); width: 370px; display: flex; flex-direction: column; transform: translateX(100%); border-left: 1px solid var(--line); background: #fff; box-shadow: -12px 0 30px rgba(27,52,42,.11); transition: transform .2s ease; }
 .detail-panel.open { transform: translateX(0); }
 .detail-panel > header { height: 65px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); }

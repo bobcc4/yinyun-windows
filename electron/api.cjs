@@ -135,8 +135,8 @@ function createApiClient(fetchImpl, serverUrl) {
       const params = new URLSearchParams({ query, type, source, page: String(page), limit: String(limit) })
       return authenticatedRequest(`/api/v1/search?${params}`)
     },
-    resolveTrack(track, quality = 'flac') {
-      const localTrackId = track && (track.localTrackId || (track.streamPath && track.id))
+    resolveTrack(track, quality = 'flac', options = {}) {
+      const localTrackId = !options.preferOnline && track && (track.localTrackId || (track.streamPath && track.id))
       if (localTrackId) {
         return authenticatedRequest(`/api/v1/library/tracks/${encodeURIComponent(localTrackId)}/stream-token`, {
           method: 'POST',

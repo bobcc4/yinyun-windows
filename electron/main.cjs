@@ -23,14 +23,27 @@ const { createSnapshotStore } = require('./snapshot-store.cjs')
 const { createDownloadParts, getDownloadExtension, getUniqueDownloadPath, trackForDownload } = require('./download.cjs')
 const { normalizeServerUrl, readCapabilities } = require('./url.cjs')
 const { compareVersions, isReleaseUrl, LATEST_RELEASE_API, parseLatestRelease } = require('./update.cjs')
+const { createXiaoaiManager } = require('./xiaoai.cjs')
+const { XiaoaiRelay } = require('./xiaoai-relay.cjs')
+const { allowXiaoaiRelay } = require('./firewall.cjs')
+const ffmpeg = require('@ffmpeg-installer/ffmpeg')
+const packageMetadata = require('../package.json')
 
 const REQUEST_TIMEOUT_MS = 12_000
 const SNAPSHOT_INTERVAL_MS = 30_000
 const APP_REPOSITORY = 'https://github.com/bobcc4/yinyun-windows'
 const MIN_SERVER_API_VERSION = '1.4.0'
+const APP_VERSION = String(packageMetadata.version || '0.0.0')
 
 app.setName('音云')
-if (!app.requestSingleInstanceLock()) app.quit()
+if (!app.requestSingleInstanceLock()) {
+  dialog.showErrorBox(
+    '音云已在运行',
+    '检测到另一个音云 Windows 客户端正在运行。请先从系统托盘完全退出旧版，再启动新版。',
+  )
+  app.quit()
+}
+app.setVersion(APP_VERSION)
 
 const userDataPath = app.getPath('userData')
 const configStore = createConfigStore(userDataPath)
@@ -40,7 +53,10 @@ const cryptoProvider = {
   decrypt: value => safeStorage.decryptString(value),
 }
 const credentialStore = createSecureJsonStore(path.join(userDataPath, 'account.json'), cryptoProvider)
+const xiaoaiStore = createSecureJsonStore(path.join(userDataPath, 'xiaoai-account.json'), cryptoProvider)
 const snapshotStore = createSnapshotStore(userDataPath, cryptoProvider)
+const xiaoaiManager = createXiaoaiManager({ fetchImpl: net.fetch, store: xiaoaiStore })
+const xiaoaiRelay = new XiaoaiRelay(net.fetch, undefined, undefined, ffmpeg.path)
 if (configStore.read().disableAcceleration) app.disableHardwareAcceleration()
 
 let tray = null
@@ -166,9 +182,10 @@ function getPublicState() {
     connection: connectionState,
     sync: { status: syncState.status, message: syncState.message, local: snapshotSummary(local) },
     account: currentAccount ? { username: currentAccount.username, serverUrl: currentAccount.serverUrl } : null,
-    appVersion: app.getVersion(),
+    appVersion: APP_VERSION,
     availableUpdate,
     repository: APP_REPOSITORY,
+    xiaoai: xiaoaiManager.state(),
   }
 }
 
@@ -530,7 +547,7 @@ function registerIpc() {
     String(options.query || '').trim(), options.type, options.source || 'tx', options.page || 1, options.limit || 30,
   ))
   ipcMain.handle('player:resolve-track', (_event, options = {}) => requireApi().resolveTrack(
-    options.track, options.quality || configStore.read().playbackQuality,
+    options.track, options.quality || configStore.read().playbackQuality, { preferOnline: options.preferOnline === true },
   ))
   ipcMain.handle('player:get-lyrics', (_event, track) => requireApi().getLyrics(track))
   ipcMain.handle('player:get-playlists', () => requireApi().getPlaylists())
@@ -550,6 +567,64 @@ function registerIpc() {
   ))
   ipcMain.handle('player:choose-download-directory', chooseDownloadDirectory)
   ipcMain.handle('player:download-track', (event, value) => downloadTrackLocally(event.sender, value))
+  ipcMain.handle('xiaoai:get-state', () => xiaoaiManager.state())
+  ipcMain.handle('xiaoai:start-login', () => xiaoaiManager.startLogin())
+  ipcMain.handle('xiaoai:poll-login', () => xiaoaiManager.pollLogin())
+  ipcMain.handle('xiaoai:get-devices', () => xiaoaiManager.devices())
+  ipcMain.handle('xiaoai:select-device', (_event, deviceId) => xiaoaiManager.selectDevice(String(deviceId || '')))
+  ipcMain.handle('xiaoai:play', async (_event, url, options = {}) => {
+    // Stop the previous device session before replacing its relay stream.
+    if (xiaoaiRelay.isRunning()) {
+      try { await xiaoaiManager.stop() } catch {}
+    }
+    const requestedSources = Array.isArray(options.sources) && options.sources.length
+      ? options.sources.slice(0, 1)
+      : Array.isArray(url) ? url.slice(0, 1) : [{ url: String(url || '') }]
+    const relayResult = await xiaoaiRelay.start(requestedSources, {
+      offsetSeconds: Math.max(0, Number(options.offsetSeconds) || 0),
+      durationSeconds: Math.max(0, Number(options.durationSeconds) || 0),
+      transcode: options.transcode === true,
+    })
+    const relayUrls = Array.isArray(relayResult) ? relayResult : [relayResult]
+    const playableSources = relayUrls.map((relayUrl, index) => ({ ...requestedSources[index], url: relayUrl }))
+    try {
+      await xiaoaiManager.play(playableSources[0].url)
+      try {
+        await xiaoaiRelay.waitUntilStreaming()
+      } catch (error) {
+        const parent = playerWindow && !playerWindow.isDestroyed() ? playerWindow : null
+        const options = {
+          type: 'warning',
+          title: '允许小爱音箱访问',
+          message: 'Windows 防火墙阻止了小爱音箱连接',
+          detail: '音云需要开放 TCP 39781 端口，仅允许同一局域网内的设备访问。确认后 Windows 会显示一次管理员授权窗口。',
+          buttons: ['授权并重试', '取消'],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        }
+        const choice = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+        if (choice.response !== 0) throw error
+        await allowXiaoaiRelay()
+        await xiaoaiManager.play(playableSources[0].url)
+        await xiaoaiRelay.waitUntilStreaming(12_000)
+      }
+      return { relayUrls }
+    } catch (error) {
+      await xiaoaiRelay.stop()
+      throw error
+    }
+  })
+  ipcMain.handle('xiaoai:pause', () => xiaoaiManager.pause())
+  ipcMain.handle('xiaoai:resume', () => xiaoaiManager.resume())
+  ipcMain.handle('xiaoai:stop', async () => {
+    try { return await xiaoaiManager.stop() }
+    finally { await xiaoaiRelay.stop() }
+  })
+  ipcMain.handle('xiaoai:set-volume', (_event, volume) => xiaoaiManager.setVolume(Number(volume)))
+  ipcMain.handle('xiaoai:get-status', async () => ({ ...(await xiaoaiManager.status()), relayConnected: xiaoaiRelay.hasActiveStream() }))
+  ipcMain.handle('xiaoai:get-conversations', (_event, limit) => xiaoaiManager.conversations(limit))
+  ipcMain.handle('xiaoai:logout', async () => { await xiaoaiRelay.stop(); return xiaoaiManager.logout() })
   ipcMain.handle('client:backup', async () => ({ success: true, ...(await pullSnapshot()) }))
   ipcMain.handle('client:restore', () => restoreLocalSnapshot())
   ipcMain.handle('client:export', async () => {
@@ -615,5 +690,5 @@ app.whenReady().then(async () => {
 })
 
 app.on('activate', () => { if (currentAccount) void openPlayerWindow(true); else showSetupWindow() })
-app.on('before-quit', () => { quitting = true })
+app.on('before-quit', () => { quitting = true; void xiaoaiRelay.stop() })
 app.on('window-all-closed', () => { })

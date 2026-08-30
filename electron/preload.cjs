@@ -27,6 +27,19 @@ contextBridge.exposeInMainWorld('yinyunClient', {
   getEntityDetail: options => ipcRenderer.invoke('player:get-entity-detail', options),
   chooseDownloadDirectory: () => ipcRenderer.invoke('player:choose-download-directory'),
   downloadTrack: (track, quality) => ipcRenderer.invoke('player:download-track', { track, quality }),
+  getXiaoaiState: () => ipcRenderer.invoke('xiaoai:get-state'),
+  startXiaoaiLogin: () => ipcRenderer.invoke('xiaoai:start-login'),
+  pollXiaoaiLogin: () => ipcRenderer.invoke('xiaoai:poll-login'),
+  getXiaoaiDevices: () => ipcRenderer.invoke('xiaoai:get-devices'),
+  selectXiaoaiDevice: deviceId => ipcRenderer.invoke('xiaoai:select-device', deviceId),
+  xiaoaiPlay: (url, options) => ipcRenderer.invoke('xiaoai:play', url, options),
+  xiaoaiPause: () => ipcRenderer.invoke('xiaoai:pause'),
+  xiaoaiResume: () => ipcRenderer.invoke('xiaoai:resume'),
+  xiaoaiStop: () => ipcRenderer.invoke('xiaoai:stop'),
+  setXiaoaiVolume: volume => ipcRenderer.invoke('xiaoai:set-volume', volume),
+  getXiaoaiStatus: () => ipcRenderer.invoke('xiaoai:get-status'),
+  getXiaoaiConversations: limit => ipcRenderer.invoke('xiaoai:get-conversations', limit),
+  logoutXiaoai: () => ipcRenderer.invoke('xiaoai:logout'),
   onDownloadProgress: callback => {
     const handler = (_event, value) => callback(value)
     ipcRenderer.on('player:download-progress', handler)

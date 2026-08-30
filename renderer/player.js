@@ -1,8 +1,9 @@
 'use strict'
 
 const api = window.yinyunClient
-const { createFavoriteIndex, favoriteTrackId, rawTrack, trackId } = window.yinyunTrackIdentity
+const { createFavoriteIndex, favoriteTrackId, rawTrack, trackId, trackIdentityAliases } = window.yinyunTrackIdentity
 const { readLyricsContent, trackForLyrics } = window.yinyunLyrics
+const { conversationKey, normalizeXiaoaiVoiceText, parseXiaoaiVoiceCommand } = window.yinyunXiaoaiVoice
 const byId = id => document.getElementById(id)
 const elements = {
   playlistNav: byId('playlist-nav'), createPlaylist: byId('create-playlist'),
@@ -20,8 +21,9 @@ const elements = {
   empty: byId('empty-state'), loading: byId('loading-state'), about: byId('about-view'),
   accountName: byId('account-name'), connectionDot: byId('connection-dot'), syncCenter: byId('sync-center'),
   aboutVersion: byId('about-version'), aboutUpdate: byId('about-update'), aboutAccount: byId('about-account'), aboutServer: byId('about-server'), aboutDownloadDirectory: byId('about-download-directory'),
+  xiaoaiView: byId('xiaoai-view'), xiaoaiAccountState: byId('xiaoai-account-state'), xiaoaiLoginSection: byId('xiaoai-login-section'), xiaoaiLogin: byId('xiaoai-login'), xiaoaiQrWrap: byId('xiaoai-qr-wrap'), xiaoaiQr: byId('xiaoai-qr'), xiaoaiQrStatus: byId('xiaoai-qr-status'), xiaoaiDeviceSection: byId('xiaoai-device-section'), xiaoaiDevice: byId('xiaoai-device'), xiaoaiRefresh: byId('xiaoai-refresh'), xiaoaiUseDevice: byId('xiaoai-use-device'), xiaoaiLogout: byId('xiaoai-logout'),
   audio: byId('audio'), nowCover: byId('now-cover'), nowTitle: byId('now-title'), nowArtist: byId('now-artist'), nowSource: byId('now-source'), nowQuality: byId('now-quality'), playerStatus: byId('player-status'), favoriteCurrent: byId('favorite-current'),
-  previous: byId('previous'), playPause: byId('play-pause'), next: byId('next'), playMode: byId('play-mode'), progress: byId('progress'), elapsed: byId('elapsed'), duration: byId('duration'), volume: byId('volume'), quality: byId('quality'), downloadDirectory: byId('download-directory'), queueToggle: byId('queue-toggle'),
+  previous: byId('previous'), playPause: byId('play-pause'), stop: byId('stop'), next: byId('next'), playMode: byId('play-mode'), progress: byId('progress'), elapsed: byId('elapsed'), duration: byId('duration'), volume: byId('volume'), quality: byId('quality'), castToggle: byId('cast-toggle'), downloadDirectory: byId('download-directory'), queueToggle: byId('queue-toggle'),
   detail: byId('detail-panel'), closeDetail: byId('close-detail'), queueCount: byId('queue-count'), clearQueue: byId('clear-queue'), queueList: byId('queue-list'),
   lyricsView: byId('lyrics-view'), closeLyrics: byId('close-lyrics'), lyricsBackdrop: byId('lyrics-backdrop'), lyricsCover: byId('lyrics-cover'), lyricsTitle: byId('lyrics-title'), lyricsArtist: byId('lyrics-artist'), lyricsSource: byId('lyrics-source'), lyricsQuality: byId('lyrics-quality'), lyricsPlaybackStatus: byId('lyrics-playback-status'), lyricsContent: byId('lyrics-content'),
   textDialog: byId('text-dialog'), textDialogTitle: byId('text-dialog-title'), textDialogInput: byId('text-dialog-input'), textDialogCancel: byId('text-dialog-cancel'), textDialogConfirm: byId('text-dialog-confirm'), playlistMenu: byId('playlist-menu'), toast: byId('toast'),
@@ -35,6 +37,7 @@ const state = {
   resolving: false, toastTimer: null, downloads: new Map(), downloadHistory: readDownloadHistory(), boardId: null, entityDetail: null, entityDetailData: null, entityTab: 'songs', detailHistory: [], navigation: [], restoringNavigation: false,
   trackSort: 'recent', librarySort: 'recent', artistFilter: 'all', selectionMode: false, selectedTracks: new Set(), playStats: readPlayStats(), albumReleaseDates: readAlbumReleaseDates(), albumReleasePromise: null,
   lyrics: [], activeLyricIndex: -1, lyricsRequestId: 0, playbackState: 'idle', playbackInfo: null,
+  output: 'local', xiaoai: { loggedIn: false, selectedDevice: null }, xiaoaiDevices: [], xiaoaiPollToken: 0, castStatusTimer: null, castProgressTimer: null, castVoiceTimer: null, castRecoveryTimer: null, castStatusReading: false, castVoiceReading: false, castVoiceReady: false, castVoiceSeenKeys: new Set(), castVoiceLastKey: '', castVoiceRecoveryNeeded: false, castUrl: '', castSourceUrl: '', castQueueSources: [], castRelayUrls: [], castTranscode: false, castGeneration: 0, castSeenPlaying: false, castPausedByUser: false, castPosition: 0, castPositionStartedAt: 0, castStreamOffset: 0, castSeeking: false, castIgnoreInactiveUntil: 0, castIgnoreRemoteTrackUntil: 0, castDeviceTrackKey: '', castRelayConnected: false, castRelayLostCount: 0, castInactiveCount: 0,
 }
 
 function readQueue() {
@@ -63,6 +66,41 @@ function normalizeTrack(value) {
     quality: value?.quality || raw.quality || '', extension: String(value?.extension || raw.extension || '').replace(/^\./, '').toLowerCase(), bitrate: Number(value?.bitrate || raw.bitrate || 0), size: Number(value?.size || raw.size || 0),
     localTrackId: value?.localTrackId || (value?.streamPath ? value.id : ''), streamPath: value?.streamPath || '', raw,
   }
+}
+function castIdentityText(value) { return String(value || '').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '') }
+function castTrackKey(track) {
+  const normalized = normalizeTrack(track)
+  const title = castIdentityText(normalized.title)
+  const artist = castIdentityText(normalized.artist)
+  return title && artist ? `${title}|${artist}` : title
+}
+function castStatusValues(status) {
+  const detail = status?.detail && typeof status.detail === 'object' ? status.detail : {}
+  return {
+    title: status?.title || detail.title || detail.song_name || detail.songName || detail.name || '',
+    artist: status?.artist || detail.artist || detail.artist_name || detail.artistName || detail.singer || '',
+    audioId: status?.audioId || detail.audio_id || detail.audioId || detail.song_id || detail.songId || '',
+  }
+}
+function castStatusKey(status) {
+  const values = castStatusValues(status)
+  const title = castIdentityText(values.title)
+  const artist = castIdentityText(values.artist)
+  const audioId = castIdentityText(values.audioId)
+  return title && artist ? `${title}|${artist}` : title ? `title:${title}` : audioId ? `id:${audioId}` : ''
+}
+function castStatusMatchesTrack(status, track) {
+  const values = castStatusValues(status)
+  const remoteTitle = castIdentityText(values.title)
+  const remoteArtist = castIdentityText(values.artist)
+  const remoteAudioId = castIdentityText(values.audioId)
+  const normalized = normalizeTrack(track)
+  const title = castIdentityText(normalized.title)
+  const artist = castIdentityText(normalized.artist)
+  if (remoteAudioId && [...trackIdentityAliases(track)].some(alias => castIdentityText(alias) === remoteAudioId)) return true
+  if (!remoteTitle || !title || remoteTitle !== title) return false
+  if (!remoteArtist || !artist) return true
+  return remoteArtist === artist || remoteArtist.includes(artist) || artist.includes(remoteArtist)
 }
 function entityKey(value) { const item = value?.raw || value || {}; return `${item.source || value?.source || ''}_${item.id || item.mid || value?.id || ''}` }
 function normalizeEntity(value, type) {
@@ -103,6 +141,11 @@ function playbackStatusText() {
   if (state.playbackState === 'buffering') return '正在缓冲'
   if (state.playbackState === 'error') return info?.error || '播放失败'
   if (!state.current) return '等待播放'
+  if (state.output === 'xiaoai') {
+    const device = state.xiaoai.selectedDevice?.name || '小爱音箱'
+    if (state.playbackState === 'paused') return `小爱投放 · ${device} · 已暂停`
+    return `小爱投放 · ${device} · 正在播放`
+  }
   if (info?.local) return state.playbackState === 'paused' ? '本地播放 · 已暂停' : '本地播放'
   if (info?.switched) return `已从 ${platformLabel(info.requestedSource)} 切换至 ${platformLabel(info.actualSource)} · ${state.playbackState === 'paused' ? '已暂停' : '正在播放'}`
   return state.playbackState === 'paused' ? '已暂停' : '正在播放'
@@ -194,7 +237,7 @@ function setActiveNavigation(attribute, value) {
 }
 function showMode(mode) {
   elements.searchView.classList.toggle('hidden', !['search', 'searchEntities'].includes(mode)); elements.leaderboardView.classList.toggle('hidden', mode !== 'leaderboards')
-  elements.libraryView.classList.toggle('hidden', !['artists', 'albums', 'searchEntities'].includes(mode)); elements.downloadsView.classList.toggle('hidden', mode !== 'downloads'); elements.tracksView.classList.toggle('hidden', !['playlist', 'songs', 'search', 'leaderboardTracks', 'artistDetail', 'albumDetail'].includes(mode)); elements.about.classList.toggle('hidden', mode !== 'about')
+  elements.libraryView.classList.toggle('hidden', !['artists', 'albums', 'searchEntities'].includes(mode)); elements.downloadsView.classList.toggle('hidden', mode !== 'downloads'); elements.tracksView.classList.toggle('hidden', !['playlist', 'songs', 'search', 'leaderboardTracks', 'artistDetail', 'albumDetail'].includes(mode)); elements.about.classList.toggle('hidden', mode !== 'about'); elements.xiaoaiView.classList.toggle('hidden', mode !== 'xiaoai')
   elements.playlistHero.classList.toggle('hidden', mode !== 'playlist')
 }
 function currentRoute() {
@@ -219,6 +262,7 @@ async function restoreRoute(route) {
     else if (route.view === 'songs') await openSongs()
     else if (route.view === 'artists' || route.view === 'albums') await openLibrary(route.view, true)
     else if (route.view === 'downloads') openDownloads()
+    else if (route.view === 'xiaoai') openXiaoai()
     else openAbout()
   } finally { state.restoringNavigation = false; elements.navBack.disabled = state.navigation.length === 0 }
 }
@@ -465,6 +509,382 @@ function renderDownloads() {
 }
 function openDownloads() { rememberNavigation({ view: 'downloads' }); state.detailHistory = []; resetEntityDetailView(); state.view = 'downloads'; setActiveNavigation('data-view', 'downloads'); showMode('downloads'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '下载管理'; elements.subtitle.textContent = 'Windows 本地下载'; renderDownloads() }
 function openAbout() { rememberNavigation({ view: 'about' }); state.detailHistory = []; resetEntityDetailView(); state.view = 'about'; setActiveNavigation('data-view', 'about'); showMode('about'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '关于'; elements.subtitle.textContent = '客户端信息' }
+function renderXiaoaiState() {
+  const loggedIn = Boolean(state.xiaoai?.loggedIn); const selected = state.xiaoai?.selectedDevice
+  elements.xiaoaiAccountState.textContent = loggedIn ? `已登录${selected ? ` · ${selected.name}` : ''}` : '未登录'; elements.xiaoaiAccountState.classList.toggle('connected', loggedIn)
+  elements.xiaoaiLoginSection.classList.toggle('hidden', loggedIn); elements.xiaoaiDeviceSection.classList.toggle('hidden', !loggedIn)
+  elements.castToggle.classList.toggle('active', state.output === 'xiaoai'); elements.castToggle.title = state.output === 'xiaoai' ? `正在投放到 ${selected?.name || '小爱音箱'}，点击断开` : selected ? `投放到 ${selected.name}` : '配置小爱投放'
+  elements.castToggle.setAttribute('aria-label', elements.castToggle.title)
+}
+async function loadXiaoaiDevices() {
+  elements.xiaoaiRefresh.disabled = true
+  try {
+    state.xiaoaiDevices = await api.getXiaoaiDevices(); elements.xiaoaiDevice.replaceChildren(new Option('请选择设备', ''))
+    for (const device of state.xiaoaiDevices) elements.xiaoaiDevice.append(new Option(`${device.name}${device.presence === 'online' ? ' · 在线' : ''}`, device.id))
+    elements.xiaoaiDevice.value = state.xiaoai.selectedDeviceId || ''; if (!state.xiaoaiDevices.length) showToast('当前小米账号下没有可用的小爱音箱', true)
+  } catch (error) { showToast(errorMessage(error), true) } finally { elements.xiaoaiRefresh.disabled = false }
+}
+function openXiaoai() {
+  rememberNavigation({ view: 'xiaoai' }); state.detailHistory = []; resetEntityDetailView(); state.view = 'xiaoai'; setActiveNavigation('data-view', 'xiaoai'); showMode('xiaoai'); elements.playlistActions.classList.add('hidden'); elements.title.textContent = '小爱投放'; elements.subtitle.textContent = '扫码登录、选择设备并控制播放'; renderXiaoaiState(); if (state.xiaoai.loggedIn && !state.xiaoaiDevices.length) void loadXiaoaiDevices()
+}
+async function startXiaoaiLogin() {
+  const token = ++state.xiaoaiPollToken; elements.xiaoaiLogin.disabled = true; elements.xiaoaiQrStatus.textContent = '正在获取二维码...'
+  try {
+    const result = await api.startXiaoaiLogin(); if (token !== state.xiaoaiPollToken) return
+    elements.xiaoaiQr.src = result.qrcodeUrl; elements.xiaoaiQrWrap.classList.remove('hidden'); elements.xiaoaiQrStatus.textContent = '请扫码并在手机上确认登录'
+    while (token === state.xiaoaiPollToken) {
+      const status = await api.pollXiaoaiLogin(); if (token !== state.xiaoaiPollToken) return
+      if (status.state === 'confirmed') { state.xiaoai = status.xiaoai; elements.xiaoaiQrWrap.classList.add('hidden'); renderXiaoaiState(); await loadXiaoaiDevices(); showToast('小米账号登录成功'); return }
+      if (['expired', 'failed'].includes(status.state)) throw new Error(status.message || '二维码已失效')
+      elements.xiaoaiQrStatus.textContent = '等待扫码并确认登录'
+    }
+  } catch (error) { elements.xiaoaiQrStatus.textContent = errorMessage(error); showToast(errorMessage(error), true) } finally { if (token === state.xiaoaiPollToken) elements.xiaoaiLogin.disabled = false }
+}
+async function selectXiaoaiDevice() {
+  const device = state.xiaoaiDevices.find(item => item.id === elements.xiaoaiDevice.value); if (!device) return showToast('请先选择小爱音箱', true)
+  state.xiaoai = await api.selectXiaoaiDevice(device.id); renderXiaoaiState(); showToast(`已选择 ${device.name}`)
+}
+function stopCastStatusPolling() {
+  if (state.castStatusTimer) clearInterval(state.castStatusTimer)
+  if (state.castProgressTimer) clearInterval(state.castProgressTimer)
+  if (state.castVoiceTimer) clearInterval(state.castVoiceTimer)
+  if (state.castRecoveryTimer) clearTimeout(state.castRecoveryTimer)
+  state.castStatusTimer = null; state.castProgressTimer = null; state.castVoiceTimer = null; state.castRecoveryTimer = null; state.castStatusReading = false; state.castVoiceReading = false; state.castVoiceReady = false; state.castInactiveCount = 0
+}
+function scheduleCastVoiceRecovery(generation) {
+  if (state.castRecoveryTimer || state.castPausedByUser || state.output !== 'xiaoai') return
+  state.castRecoveryTimer = setTimeout(async () => {
+    state.castRecoveryTimer = null
+    if (state.output !== 'xiaoai' || generation !== state.castGeneration || state.castPausedByUser || !state.current) return
+    if (!state.castVoiceRecoveryNeeded) return
+    try {
+      await resumeCastPlayback()
+    } catch {
+      // A voice interaction may temporarily interrupt the speaker stream.
+      // The next status poll will retry without changing the selected track.
+    }
+  }, 4500)
+}
+function voiceRecordList(records) {
+  return (Array.isArray(records) ? records : [])
+    .filter(record => record && record.query)
+    .sort((left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0))
+}
+function rememberVoiceRecords(records) {
+  const list = voiceRecordList(records)
+  for (const record of list.slice(-20)) state.castVoiceSeenKeys.add(conversationKey(record))
+  if (state.castVoiceSeenKeys.size > 40) state.castVoiceSeenKeys = new Set([...state.castVoiceSeenKeys].slice(-20))
+  return list.at(-1) || null
+}
+function voiceRecordIsNew(record) {
+  const key = conversationKey(record)
+  if (!key || state.castVoiceSeenKeys.has(key)) return false
+  state.castVoiceSeenKeys.add(key)
+  return true
+}
+async function searchVoiceTrack(query) {
+  const target = normalizeXiaoaiVoiceText(query)
+  if (!target) return null
+  const sources = [...new Set([state.playbackInfo?.actualSource, state.playbackInfo?.requestedSource, 'tx', 'wy'])]
+    .map(value => String(value || '').toLowerCase()).filter(value => ['tx', 'wy', 'kw', 'kg', 'mg'].includes(value))
+  for (const source of sources) {
+    try {
+      const result = await api.search({ query, source, page: 1, limit: 30 })
+      const items = Array.isArray(result?.items) ? result.items : []
+      const exactTitle = items.find(item => normalizeXiaoaiVoiceText(item.title || item.name) === target)
+      if (exactTitle) return exactTitle
+      const included = items.find(item => {
+        const title = normalizeXiaoaiVoiceText(item.title || item.name)
+        return title && (target.includes(title) || title.includes(target))
+      })
+      if (included) return included
+    } catch {
+      // Search the next enabled platform when one platform is unavailable.
+    }
+  }
+  return null
+}
+async function handleXiaoaiVoiceCommand(record, generation) {
+  const command = parseXiaoaiVoiceCommand(record.query)
+  if (command.action === 'ignore') {
+    scheduleCastVoiceRecovery(generation)
+    return
+  }
+  if (state.castRecoveryTimer) { clearTimeout(state.castRecoveryTimer); state.castRecoveryTimer = null }
+  state.castVoiceRecoveryNeeded = false
+  state.castPausedByUser = ['pause', 'stop'].includes(command.action)
+  try {
+    if (command.action === 'next') return nextTrack(true)
+    if (command.action === 'previous') return previousTrack()
+    if (command.action === 'pause') {
+      const position = currentCastPosition(); setCastPosition(position, false); state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderCastProgress(); renderPlaybackStatus(); await api.xiaoaiPause(); return
+    }
+    if (command.action === 'resume') {
+      state.castPausedByUser = false; if (state.castUrl) await resumeCastPlayback(); else await playAt(state.queueIndex, true); return
+    }
+    if (command.action === 'stop') {
+      await api.xiaoaiStop(); state.castUrl = ''; state.playbackState = 'paused'; setCastPosition(0, false); setButtonIcon(elements.playPause, 'play'); renderCastProgress(); renderPlaybackStatus(); return
+    }
+    if (command.action === 'play') {
+      const track = await searchVoiceTrack(command.query)
+      if (!track) { state.castPausedByUser = false; scheduleCastVoiceRecovery(generation); showToast(`没有找到“${command.query}”的精确歌曲`, true); return }
+      state.queue = [track]; state.queueIndex = 0; saveQueue(); renderQueue(); renderTrackList(); await playAt(0, true)
+    }
+  } catch (error) {
+    state.castPausedByUser = false
+    scheduleCastVoiceRecovery(generation)
+    showToast(`语音操作失败：${errorMessage(error)}`, true)
+  }
+}
+function startCastVoicePolling(generation) {
+  state.castVoiceReady = false
+  state.castVoiceRecoveryNeeded = false
+  state.castVoiceSeenKeys = new Set()
+  const poll = async () => {
+    if (state.output !== 'xiaoai' || generation !== state.castGeneration || state.castVoiceReading) return
+    state.castVoiceReading = true
+    try {
+      const records = await api.getXiaoaiConversations(10)
+      if (generation !== state.castGeneration || state.output !== 'xiaoai') return
+      if (!state.castVoiceReady) {
+        rememberVoiceRecords(records)
+        state.castVoiceReady = true
+        return
+      }
+      for (const record of voiceRecordList(records)) {
+        if (!voiceRecordIsNew(record)) continue
+        await handleXiaoaiVoiceCommand(record, generation)
+        break
+      }
+      if (state.castVoiceSeenKeys.size > 40) state.castVoiceSeenKeys = new Set([...state.castVoiceSeenKeys].slice(-20))
+    } catch {
+      // A temporary Xiaomi API failure must not interrupt audio playback.
+    } finally { state.castVoiceReading = false }
+  }
+  void poll()
+  state.castVoiceTimer = setInterval(() => { void poll() }, 1200)
+}
+function currentCastPosition() {
+  const elapsed = state.playbackState === 'playing' && state.castPositionStartedAt ? (Date.now() - state.castPositionStartedAt) / 1000 : 0
+  const position = Math.max(0, state.castPosition + elapsed)
+  const duration = castDuration()
+  return duration ? Math.min(duration, position) : position
+}
+function setCastPosition(position, running = state.playbackState === 'playing') {
+  state.castPosition = Math.max(0, Number(position) || 0); state.castPositionStartedAt = running ? Date.now() : 0
+}
+function castDuration() { return durationSeconds(normalizeTrack(state.current).duration) }
+function castStatusAtEnd(status, positionBeforeStatus) {
+  const duration = castDuration()
+  if (!duration) return false
+  const remotePosition = Number(status?.position)
+  const endThreshold = Math.max(1, duration - 2)
+  return positionBeforeStatus >= endThreshold || (Number.isFinite(remotePosition) && remotePosition >= endThreshold)
+}
+function nextCastQueueIndex(index) {
+  if (state.queue.length < 2 || state.playMode === 'one') return -1
+  if (state.playMode !== 'shuffle') return (index + 1) % state.queue.length
+  let next = index
+  while (next === index) next = Math.floor(Math.random() * state.queue.length)
+  return next
+}
+async function startCastPlayback(source, position = 0, transcode = state.castTranscode) {
+  const sources = (Array.isArray(source) ? source : [{ url: source, transcode }]).map(item => typeof item === 'string' ? { url: item } : { ...item })
+  if (!sources.length || !sources[0].url) throw new Error('褰撳墠姝屾洸灏氭湭鍑嗗濂芥姇鏀?')
+  const duration = castDuration()
+  const offset = Math.min(Math.max(0, Number(position) || 0), duration || Number.MAX_SAFE_INTEGER)
+  state.castGeneration++
+  const generation = state.castGeneration
+  stopCastStatusPolling()
+  state.castSourceUrl = sources[0].url
+  state.castQueueSources = sources
+  state.castRelayUrls = []
+  state.castTranscode = Boolean(sources[0].transcode ?? transcode)
+  state.castSeenPlaying = false
+  state.castPausedByUser = false
+  state.castSeeking = false
+  state.castDevicePosition = 0
+  state.castStreamOffset = offset
+  state.castDeviceTrackKey = castTrackKey(state.current)
+  state.castRelayConnected = false
+  state.castRelayLostCount = 0
+  state.castInactiveCount = 0
+  state.castIgnoreRemoteTrackUntil = Date.now() + 5000
+  state.castIgnoreInactiveUntil = Date.now() + 5000
+  setCastPosition(offset, false)
+  const result = await api.xiaoaiPlay(sources[0].url, { sources, offsetSeconds: offset, durationSeconds: duration, transcode: state.castTranscode })
+  if (generation !== state.castGeneration) return
+  state.castRelayUrls = Array.isArray(result?.relayUrls) ? result.relayUrls : []
+  state.castUrl = state.castRelayUrls[0] || ''
+  state.playbackState = 'playing'
+  setCastPosition(offset, true)
+  setButtonIcon(elements.playPause, 'pause')
+  renderCastProgress()
+  startCastStatusPolling(generation)
+}
+function castSourcesForCurrent() {
+  if (!state.castQueueSources.length) return [{ url: state.castSourceUrl, transcode: state.castTranscode }]
+  const currentKey = castTrackKey(state.current)
+  const index = state.castQueueSources.findIndex(item => castTrackKey(item) === currentKey)
+  return index > 0 ? state.castQueueSources.slice(index) : state.castQueueSources.slice()
+}
+async function seekCastTo(position) {
+  if (!state.castUrl) throw new Error('当前歌曲尚未准备好投放')
+  const duration = castDuration()
+  if (!duration) throw new Error('当前歌曲缺少时长，无法在小爱音箱中拖动播放')
+  const target = Math.min(Math.max(0, Number(position) || 0), duration)
+  const wasPlaying = state.playbackState === 'playing'
+  setCastPosition(target, false)
+  state.castStreamOffset = target
+  state.castDevicePosition = 0
+  renderCastProgress()
+  state.playbackState = 'resolving'
+  renderPlaybackStatus()
+  await startCastPlayback(castSourcesForCurrent(), target)
+  if (!wasPlaying) {
+    await api.xiaoaiPause()
+    state.castPausedByUser = true
+    setCastPosition(target, false)
+    state.playbackState = 'paused'
+    setButtonIcon(elements.playPause, 'play')
+    renderCastProgress()
+  }
+  renderPlaybackStatus()
+}
+
+async function resumeCastPlayback() {
+  const position = currentCastPosition()
+  if (!state.castUrl) throw new Error('小爱音箱未恢复播放')
+  // Pausing can close the speaker's HTTP stream. Replaying the relay URL is
+  // required to reconnect the stream; a native resume alone can report
+  // "playing" while the speaker has no audio connection left.
+  state.playbackState = 'resolving'
+  state.castPausedByUser = false
+  renderPlaybackStatus()
+  await startCastPlayback(castSourcesForCurrent(), position)
+}
+function renderCastProgress() {
+  if (state.output !== 'xiaoai' || !state.current) return
+  const duration = durationSeconds(normalizeTrack(state.current).duration); const position = duration ? Math.min(duration, currentCastPosition()) : currentCastPosition()
+  elements.elapsed.textContent = formatTime(position); elements.duration.textContent = formatTime(duration); elements.progress.value = duration ? String(Math.min(1000, Math.round(position / duration * 1000))) : '0'; syncLyrics(position)
+}
+function startCastStatusPolling(generation) {
+  stopCastStatusPolling(); state.castStatusTimer = setInterval(async () => {
+    if (state.output !== 'xiaoai' || generation !== state.castGeneration || !state.current || state.resolving || state.castStatusReading) return
+    state.castStatusReading = true
+    try {
+      const status = await api.getXiaoaiStatus(); if (generation !== state.castGeneration) return
+      const positionBeforeStatus = currentCastPosition()
+      const statusAtEnd = castStatusAtEnd(status, positionBeforeStatus)
+      if (status.volume >= 0 && document.activeElement !== elements.volume) elements.volume.value = String(Math.round(status.volume))
+      if (status.status === 0 && !state.castPausedByUser) state.castInactiveCount++
+      else if (status.status !== 0 || state.castPausedByUser) state.castInactiveCount = 0
+      if (status.relayConnected === true) {
+        state.castRelayConnected = true
+        state.castRelayLostCount = 0
+      } else if (status.relayConnected === false && state.castRelayConnected && !state.castPausedByUser) {
+        state.castRelayLostCount++
+        if (state.castRelayLostCount >= 2 && state.castInactiveCount >= 2 && statusAtEnd) {
+          state.castRelayConnected = false
+          state.castRelayLostCount = 0
+          state.castSeenPlaying = false
+          if (state.queue.length > 1) {
+            state.playbackState = 'resolving'
+            renderPlaybackStatus()
+            nextTrack(true)
+            return
+          }
+          setCastPosition(0, false)
+          state.playbackState = 'paused'
+          renderCastProgress()
+          renderPlaybackStatus()
+          return
+        }
+      }
+      const remoteKey = castStatusKey(status)
+      const trackKey = castTrackKey(state.current)
+      const acceptsRemoteTrack = Date.now() >= state.castIgnoreRemoteTrackUntil || (state.playbackState === 'paused' && !state.castPausedByUser)
+      if (remoteKey && acceptsRemoteTrack && remoteKey !== trackKey) {
+        const remoteIndex = state.queue.findIndex(track => castStatusMatchesTrack(status, track))
+        if (remoteIndex >= 0) {
+          state.castDeviceTrackKey = remoteKey
+          if (remoteIndex !== state.queueIndex) {
+            // The speaker already has the next Yinyun item. Adopt it locally;
+            // resolving it again would interrupt the device and add latency.
+            state.queueIndex = remoteIndex
+            state.current = state.queue[remoteIndex]
+            const relayIndex = state.castQueueSources.findIndex(source => castStatusMatchesTrack(status, source))
+            const queuedSource = relayIndex >= 0 ? state.castQueueSources[relayIndex] : null
+            if (relayIndex > 0) {
+              state.castQueueSources = state.castQueueSources.slice(relayIndex)
+              state.castRelayUrls = state.castRelayUrls.slice(relayIndex)
+            }
+            state.castSourceUrl = queuedSource?.url || ''
+            state.castUrl = relayIndex >= 0 ? state.castRelayUrls[relayIndex] || '' : ''
+            state.castTranscode = Boolean(queuedSource?.transcode)
+            state.castSeeking = false
+            state.castStreamOffset = 0
+            state.castDevicePosition = 0
+            state.castPausedByUser = false
+            setCastPosition(Math.max(0, Number(status.position) || 0), status.status === 1)
+            state.playbackState = status.status === 1 ? 'playing' : 'paused'
+            renderNowPlaying()
+            renderQueue()
+            renderTrackList()
+            void loadLyrics(state.current)
+          }
+        } else {
+          // Do not keep advancing the old track when the speaker is playing a
+          // song outside the client queue.
+          state.castDeviceTrackKey = remoteKey
+          setCastPosition(status.position, status.status === 1 && !state.castPausedByUser)
+          if (state.playbackState === 'playing') state.playbackState = 'paused'
+          renderCastProgress()
+          renderPlaybackStatus()
+          return
+        }
+      } else if (remoteKey) {
+        state.castDeviceTrackKey = remoteKey
+      }
+      if (!state.castSeeking && status.status === 1 && status.position >= 0 && !state.castPausedByUser) {
+        // Some XiaoAI models report a stale zero position. Do not let it reset
+        // the local clock that drives the progress bar.
+        if (status.position > state.castDevicePosition + 1) {
+          state.castDevicePosition = status.position
+          setCastPosition(state.castStreamOffset + status.position, state.playbackState === 'playing')
+        }
+      }
+      const acceptsInactiveStatus = Date.now() >= state.castIgnoreInactiveUntil
+      if (status.status === 1 && !state.castPausedByUser) { state.castSeenPlaying = true; state.castIgnoreInactiveUntil = 0; if (state.playbackState !== 'playing') { state.playbackState = 'playing'; state.castPositionStartedAt = Date.now() } setButtonIcon(elements.playPause, 'pause'); renderPlaybackStatus() }
+      else if (status.status === 2 && state.castSeenPlaying && !state.castPausedByUser) {
+        // Voice wake-up and TTS can report paused for a short period. Wait for
+        // the conversation poll before changing the local playback state.
+        state.castVoiceRecoveryNeeded = true
+        scheduleCastVoiceRecovery(generation)
+      }
+      else if (status.status === 0 && state.castSeenPlaying && acceptsInactiveStatus && !state.castPausedByUser) {
+        if (state.castInactiveCount >= 2 && acceptsInactiveStatus && statusAtEnd) { state.castSeenPlaying = false; state.castInactiveCount = 0; nextTrack(false) }
+        else {
+          state.castVoiceRecoveryNeeded = true
+          scheduleCastVoiceRecovery(generation)
+        }
+      }
+    } catch { /* A temporary status read failure must not interrupt playback. */ }
+    finally { state.castStatusReading = false }
+  }, 1000)
+  state.castProgressTimer = setInterval(() => {
+    if (state.output === 'xiaoai' && generation === state.castGeneration && state.current) renderCastProgress()
+  }, 250)
+  startCastVoicePolling(generation)
+}
+async function enableXiaoaiOutput() {
+  if (!state.xiaoai.loggedIn || !state.xiaoai.selectedDevice) { openXiaoai(); return showToast('请先登录小米账号并选择设备', true) }
+  elements.audio.pause(); elements.audio.removeAttribute('src'); state.output = 'xiaoai'; renderXiaoaiState(); if (state.current) await playAt(state.queueIndex, true); else showToast(`后续歌曲将投放到 ${state.xiaoai.selectedDevice.name}`)
+}
+async function disableXiaoaiOutput() {
+  state.castSourceUrl = ''; state.castQueueSources = []; state.castRelayUrls = []
+  state.castGeneration++; stopCastStatusPolling(); try { await api.xiaoaiStop() } catch {} state.output = 'local'; state.castUrl = ''; state.castTranscode = false; state.castSeenPlaying = false; state.castPausedByUser = false; state.castSeeking = false; state.castStreamOffset = 0; state.castIgnoreInactiveUntil = 0; state.castIgnoreRemoteTrackUntil = 0; state.castDeviceTrackKey = ''; state.castRelayConnected = false; state.castRelayLostCount = 0; setCastPosition(0, false); state.castDevicePosition = 0; state.playbackState = state.current ? 'paused' : 'idle'; setButtonIcon(elements.playPause, 'play'); renderXiaoaiState(); renderPlaybackStatus(); showToast('已断开小爱投放')
+}
 function artistNames(value) { return [...new Set(String(value || '').split(/[、，,&；;|/+]/).map(name => name.trim()).filter(Boolean))] }
 async function searchArtist(name) {
   if (!name) return
@@ -478,12 +898,37 @@ function openCurrentArtist(anchor, event) {
   elements.playlistMenu.replaceChildren(); names.forEach(name => { const button = document.createElement('button'); button.type = 'button'; button.append(icon('user-round'), name); button.addEventListener('click', () => { elements.playlistMenu.classList.add('hidden'); void searchArtist(name) }); elements.playlistMenu.append(button) }); const rect = anchor.getBoundingClientRect(); elements.playlistMenu.style.left = `${Math.min(rect.left, innerWidth - 220)}px`; elements.playlistMenu.style.top = `${Math.min(rect.bottom + 4, innerHeight - 280)}px`; elements.playlistMenu.classList.remove('hidden'); replaceIcons()
 }
 function playFromTracks(sourceTrack) { const index = state.tracks.indexOf(sourceTrack); state.queue = state.tracks.slice(); state.queueIndex = Math.max(0, index); saveQueue(); renderQueue(); void playAt(state.queueIndex) }
-async function playAt(index) {
-  if (!state.queue.length || state.resolving) return; const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length; state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; state.playbackState = 'resolving'; state.playbackInfo = { requestedSource: normalizeTrack(state.current).source, actualQuality: elements.quality.value }; renderNowPlaying(); renderQueue(); renderTrackList()
-  try { const original = state.current; const result = await api.resolveTrack({ track: original, quality: elements.quality.value }); if (state.current !== state.queue[normalized]) return; const originalTrack = normalizeTrack(original); const originalRaw = rawTrack(original); const originalSource = originalTrack.source; const actualSource = result.local ? (original.downloadSource || originalRaw.downloadSource || result.actualSource || originalSource) : (result.actualSource || originalSource); elements.audio.src = result.url; state.current = { ...original, quality: result.quality || original.quality, source: actualSource, raw: { ...originalRaw, ...(result.track?.raw || result.track || {}) } }; state.playbackInfo = { requestedSource: result.requestedSource || originalSource, actualSource, actualQuality: result.quality || original.quality || elements.quality.value, sourceName: result.sourceName || '', local: Boolean(result.local), switched: !result.local && Boolean(originalSource && actualSource && platformLabel(originalSource) !== platformLabel(actualSource)) }; renderNowPlaying(); renderTrackList(); void loadLyrics(state.current); await elements.audio.play(); const id = trackId(original); const previous = state.playStats[id] || {}; state.playStats[id] = { count: Number(previous.count || 0) + 1, lastPlayed: Date.now() }; savePlayStats() } catch (error) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus(); showToast(`无法播放：${errorMessage(error)}`, true) } finally { state.resolving = false }
+async function playAt(index, force = false) {
+  if (!state.queue.length || (state.resolving && !force)) return; const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length; state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; state.playbackState = 'resolving'; const cast = state.output === 'xiaoai'; const requestedQuality = cast ? '320k' : elements.quality.value; state.playbackInfo = { requestedSource: normalizeTrack(state.current).source, actualQuality: requestedQuality }; renderNowPlaying(); renderQueue(); renderTrackList()
+  try { const original = state.current; const originalTrack = normalizeTrack(original); const result = await api.resolveTrack({ track: original, quality: requestedQuality, preferOnline: false }); if (state.current !== state.queue[normalized]) return; const originalRaw = rawTrack(original); const originalSource = originalTrack.source; const actualSource = result.local ? (original.downloadSource || originalRaw.downloadSource || result.actualSource || originalSource) : (result.actualSource || originalSource); state.current = { ...original, quality: result.quality || original.quality, source: actualSource, raw: { ...originalRaw, ...(result.track?.raw || result.track || {}) } }; state.playbackInfo = { requestedSource: result.requestedSource || originalSource, actualSource, actualQuality: result.quality || original.quality || requestedQuality, sourceName: result.sourceName || '', local: Boolean(result.local), switched: !result.local && Boolean(originalSource && actualSource && platformLabel(originalSource) !== platformLabel(actualSource)) }; renderNowPlaying(); renderTrackList(); void loadLyrics(state.current)
+    if (cast) { elements.audio.pause(); elements.audio.removeAttribute('src'); await startCastPlayback(await buildCastSources(original, result), 0) }
+    else { elements.audio.src = result.url; await elements.audio.play(); state.playbackState = 'playing'; setButtonIcon(elements.playPause, 'pause') }
+    const id = trackId(original); const previous = state.playStats[id] || {}; state.playStats[id] = { count: Number(previous.count || 0) + 1, lastPlayed: Date.now() }; savePlayStats(); renderPlaybackStatus()
+  } catch (error) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus(); showToast(`无法播放：${errorMessage(error)}`, true) } finally { state.resolving = false }
 }
-function nextTrack(manual = false) { if (!state.queue.length) return; let next = state.queueIndex + 1; if (state.playMode === 'shuffle' && state.queue.length > 1) do next = Math.floor(Math.random() * state.queue.length); while (next === state.queueIndex); else if (!manual && state.playMode === 'one') next = state.queueIndex; void playAt(next) }
-function previousTrack() { if (elements.audio.currentTime > 4) { elements.audio.currentTime = 0; return } void playAt(state.queueIndex - 1) }
+async function buildCastSources(currentTrack, currentResult) {
+  const current = normalizeTrack(currentTrack)
+  const sources = [{
+    url: currentResult.url,
+    id: trackId(currentTrack),
+    audioId: trackId(currentTrack),
+    title: current.title,
+    artist: current.artist,
+    album: current.album,
+    transcode: Boolean(currentResult.local && normalizeTrack(currentResult.track || currentTrack).extension !== 'mp3'),
+  }]
+  return sources
+}
+function nextTrack(manual = false) { if (!state.queue.length) return; let next = state.queueIndex + 1; if (state.playMode === 'shuffle' && state.queue.length > 1) do next = Math.floor(Math.random() * state.queue.length); while (next === state.queueIndex); else if (!manual && state.playMode === 'one') next = state.queueIndex; void playAt(next, manual) }
+function previousTrack() { if (state.output === 'local' && elements.audio.currentTime > 4) { elements.audio.currentTime = 0; return } void playAt(state.queueIndex - 1) }
+async function stopCurrentTrack() {
+  if (!state.current) return
+  try {
+    if (state.output === 'xiaoai') { await api.xiaoaiStop(); state.castGeneration++; stopCastStatusPolling(); state.castPausedByUser = true; state.castSeenPlaying = false; state.castSeeking = false; state.castStreamOffset = 0; state.castIgnoreInactiveUntil = 0; state.castIgnoreRemoteTrackUntil = 0; state.castDeviceTrackKey = ''; state.castRelayConnected = false; state.castRelayLostCount = 0; setCastPosition(0, false); state.castDevicePosition = 0 }
+    else { elements.audio.pause(); elements.audio.currentTime = 0 }
+    state.playbackState = 'paused'; elements.progress.value = 0; elements.elapsed.textContent = '0:00'; setButtonIcon(elements.playPause, 'play'); renderPlaybackStatus()
+  } catch (error) { showToast(errorMessage(error), true) }
+}
 function renderNowPlaying() {
   const track = state.current ? normalizeTrack(state.current) : null
   elements.nowTitle.textContent = track?.title || '尚未播放'; elements.nowArtist.textContent = track?.artist || '选择一首歌曲开始播放'; elements.nowArtist.disabled = !track?.artist; renderCover(elements.nowCover, track?.artworkUrl, 'now'); elements.nowCover.disabled = !track; elements.favoriteCurrent.disabled = !track
@@ -506,7 +951,7 @@ function showPlaylistMenu(anchor, track) { elements.playlistMenu.replaceChildren
 async function removeFromCurrentPlaylist(track) { try { await api.removeFromPlaylist(state.playlistId, trackId(track)); await openPlaylist(state.playlistId); await refreshPlaylists(); showToast('已从歌单移除') } catch (error) { showToast(errorMessage(error), true) } }
 async function downloadTrack(track) { const normalized = normalizeTrack(track); const id = trackId(track); state.downloads.set(id, 'downloading'); updateDownloadRecord({ id, status: 'downloading', title: normalized.title, artist: normalized.artist, album: normalized.album, quality: elements.quality.value, source: normalized.source, received: 0, total: 0 }); renderTrackList(); try { const result = await api.downloadTrack(track, elements.quality.value); if (result?.cancelled) { state.downloads.delete(id); state.downloadHistory = state.downloadHistory.filter(item => item.id !== id); saveDownloadHistory(); renderTrackList(); return } showToast(`已下载到 Windows：${result.path}`); state.downloads.delete(id); renderTrackList() } catch (error) { state.downloads.delete(id); updateDownloadRecord({ id, status: 'failed', title: normalized.title, artist: normalized.artist, album: normalized.album, quality: elements.quality.value, source: normalized.source, error: errorMessage(error) }); renderTrackList(); showToast(`下载失败：${errorMessage(error)}`, true) } }
 function renderQueue() { elements.queueList.replaceChildren(); elements.queueCount.textContent = `${state.queue.length} 首`; state.queue.forEach((item, index) => { const row = document.createElement('div'); row.className = `queue-item${index === state.queueIndex ? ' playing' : ''}`; const track = normalizeTrack(item); const cover = document.createElement('div'); cover.className = 'queue-cover'; renderCover(cover, track.artworkUrl); const copy = document.createElement('div'); copy.className = 'queue-item-copy'; copy.append(Object.assign(document.createElement('strong'), { textContent: track.title }), Object.assign(document.createElement('span'), { textContent: track.artist })); copy.addEventListener('dblclick', () => void playAt(index)); const remove = makeIconButton('x', '移出队列'); remove.addEventListener('click', () => { state.queue.splice(index, 1); if (index < state.queueIndex) state.queueIndex--; else if (index === state.queueIndex && state.queue.length) { state.queueIndex = Math.min(index, state.queue.length - 1); void playAt(state.queueIndex) } else if (!state.queue.length) stopPlayback(); saveQueue(); renderQueue() }); row.append(cover, copy, remove); elements.queueList.append(row) }); saveQueue(); replaceIcons() }
-function stopPlayback() { elements.audio.pause(); elements.audio.removeAttribute('src'); state.current = null; state.queueIndex = -1; state.playbackState = 'idle'; state.playbackInfo = null; renderNowPlaying(); renderTrackList(); elements.progress.value = 0; elements.elapsed.textContent = '0:00'; elements.duration.textContent = '0:00' }
+  function stopPlayback() { if (state.output === 'xiaoai') void api.xiaoaiStop().catch(() => {}); stopCastStatusPolling(); elements.audio.pause(); elements.audio.removeAttribute('src'); state.current = null; state.queueIndex = -1; state.playbackState = 'idle'; state.playbackInfo = null; state.castUrl = ''; state.castTranscode = false; state.castSeenPlaying = false; state.castPausedByUser = false; state.castSeeking = false; state.castStreamOffset = 0; state.castIgnoreInactiveUntil = 0; state.castIgnoreRemoteTrackUntil = 0; state.castDeviceTrackKey = ''; state.castRelayConnected = false; state.castRelayLostCount = 0; setCastPosition(0, false); state.castDevicePosition = 0; renderNowPlaying(); renderTrackList(); elements.progress.value = 0; elements.elapsed.textContent = '0:00'; elements.duration.textContent = '0:00' }
 function closeDetail() { elements.detail.classList.remove('open'); elements.detail.setAttribute('aria-hidden', 'true') }
 function toggleQueue() { if (elements.detail.classList.contains('open')) closeDetail(); else { elements.detail.classList.add('open'); elements.detail.setAttribute('aria-hidden', 'false') } }
 function updateCoverIndicators() {
@@ -543,7 +988,7 @@ function renderLyrics(lines, status = '') {
   if (!lines.length) { elements.lyricsContent.append(Object.assign(document.createElement('p'), { className: 'lyric-line', textContent: status || '暂无歌词' })); return }
   lines.forEach(line => {
     const item = Object.assign(document.createElement('p'), { className: 'lyric-line', textContent: line.text })
-    if (line.time !== null) { item.dataset.time = String(line.time); item.tabIndex = 0; item.setAttribute('role', 'button'); item.addEventListener('click', () => { elements.audio.currentTime = line.time; syncLyrics(line.time) }); item.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click() } }) }
+    if (line.time !== null) { item.dataset.time = String(line.time); item.tabIndex = 0; item.setAttribute('role', 'button'); item.addEventListener('click', () => { if (state.output === 'xiaoai') void seekCastTo(line.time).catch(error => showToast(errorMessage(error), true)); else { elements.audio.currentTime = line.time; syncLyrics(line.time) } }); item.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); item.click() } }) }
     elements.lyricsContent.append(item)
   })
 }
@@ -567,7 +1012,7 @@ function handleDownloadProgress(value) { if (!value) return; updateDownloadRecor
 elements.searchForm.addEventListener('submit', event => { event.preventDefault(); void search() })
 elements.searchTypes.forEach(button => button.addEventListener('click', () => { state.searchType = button.dataset.type; elements.searchTypes.forEach(item => item.classList.toggle('active', item === button)); updateSearchControls(); if (elements.searchInput.value.trim()) void search() }))
 elements.sourceTabs.forEach(button => button.addEventListener('click', () => { state.searchSource = button.dataset.source; elements.sourceTabs.forEach(item => item.classList.toggle('active', item === button)); if (elements.searchInput.value.trim()) void search() }))
-document.querySelector('[data-view="search"]').addEventListener('click', openSearch); document.querySelector('[data-view="leaderboards"]').addEventListener('click', () => void openLeaderboards()); document.querySelector('[data-view="songs"]').addEventListener('click', () => void openSongs()); document.querySelector('[data-view="artists"]').addEventListener('click', () => void openLibrary('artists')); document.querySelector('[data-view="albums"]').addEventListener('click', () => void openLibrary('albums')); document.querySelector('[data-view="downloads"]').addEventListener('click', openDownloads); document.querySelector('[data-playlist="love"]').addEventListener('click', () => void openPlaylist('love')); document.querySelector('[data-view="about"]').addEventListener('click', openAbout)
+document.querySelector('[data-view="search"]').addEventListener('click', openSearch); document.querySelector('[data-view="leaderboards"]').addEventListener('click', () => void openLeaderboards()); document.querySelector('[data-view="songs"]').addEventListener('click', () => void openSongs()); document.querySelector('[data-view="artists"]').addEventListener('click', () => void openLibrary('artists')); document.querySelector('[data-view="albums"]').addEventListener('click', () => void openLibrary('albums')); document.querySelector('[data-view="downloads"]').addEventListener('click', openDownloads); document.querySelector('[data-view="xiaoai"]').addEventListener('click', openXiaoai); document.querySelector('[data-playlist="love"]').addEventListener('click', () => void openPlaylist('love')); document.querySelector('[data-view="about"]').addEventListener('click', openAbout)
 elements.syncCenter.addEventListener('click', () => api.openSyncCenter()); elements.libraryRefresh.addEventListener('click', () => void openLibrary(state.libraryType)); elements.leaderboardSource.addEventListener('change', () => { state.boardSource = elements.leaderboardSource.value; void loadBoards() })
 elements.librarySort.addEventListener('change', async () => { if (state.libraryType === 'artists') state.artistFilter = elements.librarySort.value; else state.librarySort = elements.librarySort.value; if (state.libraryType === 'albums' && state.librarySort === 'released') await resolveAlbumReleaseDates(localEntities('albums')); renderLibrary(state.libraryType) })
 elements.navBack.addEventListener('click', goBack)
@@ -576,17 +1021,51 @@ elements.renamePlaylist.addEventListener('click', async () => { const current = 
 elements.deletePlaylist.addEventListener('click', async () => { const current = state.playlists.find(item => item.id === state.playlistId); if (!current || !window.confirm(`删除歌单“${current.name}”？`)) return; try { await api.deletePlaylist(current.id); await refreshPlaylists(); await openPlaylist('love'); showToast('歌单已删除') } catch (error) { showToast(errorMessage(error), true) } })
 elements.trackSort.addEventListener('change', () => { state.trackSort = elements.trackSort.value; applyTrackSort(); renderTrackList() }); elements.trackSelect.addEventListener('click', toggleSelectionMode); elements.playlistSelect.addEventListener('click', toggleSelectionMode); elements.entitySelect.addEventListener('click', toggleSelectionMode)
 elements.entityTabButtons.forEach(button => button.addEventListener('click', () => renderEntityTab(button.dataset.entityTab)))
-elements.playAll.addEventListener('click', () => playCollection(false)); elements.shuffleAll.addEventListener('click', () => playCollection(true)); elements.entityPlayAll.addEventListener('click', () => playCollection(false)); elements.entityShuffle.addEventListener('click', () => playCollection(true)); elements.favoriteCurrent.addEventListener('click', () => { if (state.current) void toggleFavorite(state.current) }); elements.playPause.addEventListener('click', () => { if (!state.current && state.queue.length) return void playAt(Math.max(0, state.queueIndex)); if (!state.current && state.tracks.length) return playFromTracks(state.tracks[0]); if (elements.audio.paused) elements.audio.play().catch(error => showToast(errorMessage(error), true)); else elements.audio.pause() }); elements.previous.addEventListener('click', previousTrack); elements.next.addEventListener('click', () => nextTrack(true))
+elements.playAll.addEventListener('click', () => playCollection(false)); elements.shuffleAll.addEventListener('click', () => playCollection(true)); elements.entityPlayAll.addEventListener('click', () => playCollection(false)); elements.entityShuffle.addEventListener('click', () => playCollection(true)); elements.favoriteCurrent.addEventListener('click', () => { if (state.current) void toggleFavorite(state.current) }); elements.playPause.addEventListener('click', async () => {
+  if (!state.current && state.queue.length) return void playAt(Math.max(0, state.queueIndex)); if (!state.current && state.tracks.length) return playFromTracks(state.tracks[0])
+  if (state.output === 'local') {
+    if (elements.audio.paused) {
+      try {
+        await elements.audio.play()
+        if (state.current && state.output === 'local' && !elements.audio.paused) {
+          state.playbackState = 'playing'
+          setButtonIcon(elements.playPause, 'pause')
+          renderPlaybackStatus()
+        }
+      } catch (error) { showToast(errorMessage(error), true) }
+    } else {
+      elements.audio.pause()
+      if (state.current) {
+        state.playbackState = 'paused'
+        setButtonIcon(elements.playPause, 'play')
+        renderPlaybackStatus()
+      }
+    }
+    return
+  }
+  try {
+    if (state.playbackState === 'playing') {
+      const position = currentCastPosition(); state.castPausedByUser = true; setCastPosition(position, false); state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderCastProgress(); renderPlaybackStatus()
+      try { await api.xiaoaiPause() } catch (error) { state.castPausedByUser = false; state.playbackState = 'playing'; state.castPositionStartedAt = Date.now(); setButtonIcon(elements.playPause, 'pause'); renderPlaybackStatus(); throw error }
+    }
+    else if (!state.castUrl) await playAt(state.queueIndex, true)
+    else { await resumeCastPlayback() }
+    renderPlaybackStatus()
+  } catch (error) { showToast(errorMessage(error), true) }
+}); elements.previous.addEventListener('click', previousTrack); elements.stop.addEventListener('click', () => void stopCurrentTrack()); elements.next.addEventListener('click', () => nextTrack(true))
 elements.entityFavorite.addEventListener('click', () => { const target = entityFavoriteItem(state.entityDetail); if (target) void toggleEntityFavorite(state.entityDetail.kind === 'singer' ? 'artists' : 'albums', target) })
 elements.heroPlayAll.addEventListener('click', () => playCollection(false)); elements.heroShuffle.addEventListener('click', () => playCollection(true))
 elements.playMode.addEventListener('click', () => { state.playMode = state.playMode === 'list' ? 'one' : state.playMode === 'one' ? 'shuffle' : 'list'; localStorage.setItem('yinyun-player-mode', state.playMode); renderPlayMode() }); elements.queueToggle.addEventListener('click', toggleQueue); elements.closeDetail.addEventListener('click', closeDetail); elements.nowCover.addEventListener('click', toggleLyrics); elements.nowArtist.addEventListener('click', event => openCurrentArtist(elements.nowArtist, event)); elements.lyricsArtist.addEventListener('click', event => openCurrentArtist(elements.lyricsArtist, event)); elements.lyricsCover.addEventListener('click', closeLyrics); elements.closeLyrics.addEventListener('click', closeLyrics); elements.textDialogCancel.addEventListener('click', () => elements.textDialog.close('cancel')); elements.clearQueue.addEventListener('click', () => { state.queue = []; stopPlayback(); renderQueue() })
-elements.volume.addEventListener('input', () => { elements.audio.volume = Number(elements.volume.value) / 100 }); elements.volume.addEventListener('change', () => api.savePreferences({ volume: elements.audio.volume })); elements.quality.addEventListener('change', () => api.savePreferences({ playbackQuality: elements.quality.value })); elements.progress.addEventListener('input', () => { if (Number.isFinite(elements.audio.duration)) elements.audio.currentTime = Number(elements.progress.value) / 1000 * elements.audio.duration }); elements.audio.addEventListener('timeupdate', () => { const duration = elements.audio.duration || 0; elements.progress.value = duration ? String(Math.round(elements.audio.currentTime / duration * 1000)) : '0'; elements.elapsed.textContent = formatTime(elements.audio.currentTime); elements.duration.textContent = formatTime(duration); syncLyrics(elements.audio.currentTime) }); elements.audio.addEventListener('play', () => { setButtonIcon(elements.playPause, 'pause'); if (state.playbackState !== 'resolving') { state.playbackState = 'playing'; renderPlaybackStatus() } }); elements.audio.addEventListener('playing', () => { state.playbackState = 'playing'; renderPlaybackStatus() }); elements.audio.addEventListener('waiting', () => { if (!state.current || state.playbackState === 'resolving') return; state.playbackState = 'buffering'; renderPlaybackStatus() }); elements.audio.addEventListener('pause', () => { if (state.current && !['error', 'resolving'].includes(state.playbackState)) state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderPlaybackStatus() }); elements.audio.addEventListener('ended', () => nextTrack(false)); elements.audio.addEventListener('error', () => { if (!elements.audio.src) return; state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: '当前歌曲播放失败' }; renderPlaybackStatus(); showToast('当前歌曲播放失败', true) }); document.addEventListener('click', event => { if (!elements.playlistMenu.contains(event.target)) elements.playlistMenu.classList.add('hidden') }); document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeLyrics(); closeDetail(); return } if (event.code !== 'Space' || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return; event.preventDefault(); elements.playPause.click() })
+elements.volume.addEventListener('input', () => { if (state.output === 'local') elements.audio.volume = Number(elements.volume.value) / 100 }); elements.volume.addEventListener('change', async () => { try { if (state.output === 'xiaoai') await api.setXiaoaiVolume(Number(elements.volume.value)); else await api.savePreferences({ volume: elements.audio.volume }) } catch (error) { showToast(errorMessage(error), true) } }); elements.quality.addEventListener('change', () => api.savePreferences({ playbackQuality: elements.quality.value })); elements.progress.addEventListener('input', () => { if (state.output === 'local' && Number.isFinite(elements.audio.duration)) { elements.audio.currentTime = Number(elements.progress.value) / 1000 * elements.audio.duration } else if (state.output === 'xiaoai' && state.current) { state.castSeeking = true; setCastPosition(Number(elements.progress.value) / 1000 * castDuration(), false); renderCastProgress() } }); elements.progress.addEventListener('change', () => { if (state.output !== 'xiaoai' || !state.current) return; const position = currentCastPosition(); state.castSeeking = false; void seekCastTo(position).catch(error => { renderPlaybackStatus(); showToast(errorMessage(error), true) }) }); elements.audio.addEventListener('timeupdate', () => { if (state.output !== 'local') return; const duration = elements.audio.duration || 0; elements.progress.value = duration ? String(Math.round(elements.audio.currentTime / duration * 1000)) : '0'; elements.elapsed.textContent = formatTime(elements.audio.currentTime); elements.duration.textContent = formatTime(duration); syncLyrics(elements.audio.currentTime) }); elements.audio.addEventListener('play', () => { if (state.output !== 'local') return; setButtonIcon(elements.playPause, 'pause'); if (state.playbackState !== 'resolving') { state.playbackState = 'playing'; renderPlaybackStatus() } }); elements.audio.addEventListener('playing', () => { if (state.output !== 'local') return; state.playbackState = 'playing'; renderPlaybackStatus() }); elements.audio.addEventListener('waiting', () => { if (state.output !== 'local' || !state.current || state.playbackState === 'resolving') return; state.playbackState = 'buffering'; renderPlaybackStatus() }); elements.audio.addEventListener('pause', () => { if (state.output !== 'local') return; if (state.current && !['error', 'resolving'].includes(state.playbackState)) state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderPlaybackStatus() }); elements.audio.addEventListener('ended', () => { if (state.output === 'local') nextTrack(false) }); elements.audio.addEventListener('error', () => { if (state.output !== 'local' || !elements.audio.src) return; state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: '当前歌曲播放失败' }; renderPlaybackStatus(); showToast('当前歌曲播放失败', true) }); document.addEventListener('click', event => { if (!elements.playlistMenu.contains(event.target)) elements.playlistMenu.classList.add('hidden') }); document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeLyrics(); closeDetail(); return } if (event.code !== 'Space' || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return; event.preventDefault(); elements.playPause.click() })
+elements.castToggle.addEventListener('click', () => void (state.output === 'xiaoai' ? disableXiaoaiOutput() : enableXiaoaiOutput()))
+elements.xiaoaiLogin.addEventListener('click', () => void startXiaoaiLogin()); elements.xiaoaiRefresh.addEventListener('click', () => void loadXiaoaiDevices()); elements.xiaoaiUseDevice.addEventListener('click', async () => { try { if (state.output === 'xiaoai') await disableXiaoaiOutput(); await selectXiaoaiDevice(); await enableXiaoaiOutput() } catch (error) { showToast(errorMessage(error), true) } }); elements.xiaoaiLogout.addEventListener('click', async () => { try { state.xiaoaiPollToken++; if (state.output === 'xiaoai') await disableXiaoaiOutput(); state.xiaoai = await api.logoutXiaoai(); state.xiaoaiDevices = []; elements.xiaoaiQrWrap.classList.add('hidden'); renderXiaoaiState(); showToast('已退出小米账号') } catch (error) { showToast(errorMessage(error), true) } })
 elements.downloadDirectory.addEventListener('click', async () => { try { const result = await api.chooseDownloadDirectory(); if (!result?.success) return; state.app.config.downloadDirectory = result.directory; elements.aboutDownloadDirectory.textContent = result.directory; showToast(`下载目录已设置：${result.directory}`) } catch (error) { showToast(errorMessage(error), true) } })
 elements.openDownloadDirectory.addEventListener('click', () => elements.downloadDirectory.click())
 function renderAppState(value) {
-  state.app = value; const connected = Boolean(value.account); elements.accountName.textContent = connected ? value.account.username : '连接已断开'; elements.connectionDot.classList.toggle('offline', !connected)
+  state.app = value; if (value.xiaoai) state.xiaoai = value.xiaoai; const connected = Boolean(value.account); elements.accountName.textContent = connected ? value.account.username : '连接已断开'; elements.connectionDot.classList.toggle('offline', !connected)
   elements.aboutVersion.textContent = `v${value.appVersion}`; elements.aboutAccount.textContent = value.account?.username || '-'; elements.aboutServer.textContent = value.account?.serverUrl || '-'; elements.aboutDownloadDirectory.textContent = value.config.downloadDirectory || '首次下载时选择'
   const update = value.availableUpdate; elements.aboutUpdate.classList.toggle('hidden', !update); elements.aboutUpdate.textContent = update ? `有新版本 v${update.version}` : ''; elements.aboutUpdate.dataset.url = update?.url || ''
+  renderXiaoaiState()
 }
 elements.aboutUpdate.addEventListener('click', () => { const url = elements.aboutUpdate.dataset.url; if (url) api.openExternal(url) })
 api.onDownloadProgress(handleDownloadProgress); api.onState(renderAppState)
