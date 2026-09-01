@@ -79,6 +79,16 @@ test('creates a local QR image from Xiaomi loginUrl', async () => {
   assert.equal(result.loginUrl, 'https://account.xiaomi.com/confirm?id=1')
 })
 
+test('continues QR login when Xiaomi returns a non-zero pre-login code with valid QR parameters', async () => {
+  const fetchImpl = async url => {
+    if (url.includes('/serviceLogin')) return response(200, `&&&START&&&${JSON.stringify({ code: 70016, description: '登录验证失败', _sign: 'sign', qs: 'query', callback: 'callback' })}`)
+    return response(200, { code: 0, lp: 'https://account.xiaomi.com/poll', loginUrl: 'https://account.xiaomi.com/confirm?id=1' })
+  }
+  const result = await new XiaomiQrLogin(fetchImpl).start()
+  assert.equal(result.state, 'waiting')
+  assert.equal(result.loginUrl, 'https://account.xiaomi.com/confirm?id=1')
+})
+
 test('uses the micoapi userId returned during service-token exchange', async () => {
   const calls = []
   const fetchImpl = async url => {

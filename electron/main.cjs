@@ -55,7 +55,10 @@ const cryptoProvider = {
 const credentialStore = createSecureJsonStore(path.join(userDataPath, 'account.json'), cryptoProvider)
 const xiaoaiStore = createSecureJsonStore(path.join(userDataPath, 'xiaoai-account.json'), cryptoProvider)
 const snapshotStore = createSnapshotStore(userDataPath, cryptoProvider)
-const xiaoaiManager = createXiaoaiManager({ fetchImpl: net.fetch, store: xiaoaiStore })
+// Electron net.fetch may return an incomplete Xiaomi account response in the
+// main process. The standards-compliant global fetch keeps the QR login flow
+// consistent with the tested Node implementation.
+const xiaoaiManager = createXiaoaiManager({ fetchImpl: globalThis.fetch, store: xiaoaiStore })
 const xiaoaiRelay = new XiaoaiRelay(net.fetch, undefined, undefined, ffmpeg.path)
 if (configStore.read().disableAcceleration) app.disableHardwareAcceleration()
 

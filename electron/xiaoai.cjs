@@ -199,9 +199,15 @@ class XiaomiQrLogin {
     this.reset()
     const headers = { 'User-Agent': userAgent(this.id), Cookie: `sdkVersion=3.8.6; deviceId=${this.id}` }
     const first = await followRedirects(this.fetch, `${ACCOUNT_BASE}/pass/serviceLogin?sid=${QR_SID}&_json=true`, { method: 'GET', headers }, this.cookies, 0)
-    const login = JSON.parse(stripJsonPrefix(first.text))
+    let login
+    try { login = JSON.parse(stripJsonPrefix(first.text)) }
+    catch { throw new Error('小米登录服务返回了无法识别的内容，请检查网络后重试') }
     const params = new URLSearchParams({ _qrsize: '240', qs: stringValue(login, 'qs'), sid: QR_SID, _sign: stringValue(login, '_sign'), callback: stringValue(login, 'callback'), _json: 'true', _dc: String(Date.now()) })
-    if (!params.get('qs') || !params.get('_sign') || !params.get('callback')) throw new Error('小米登录未返回二维码参数')
+    if (!params.get('qs') || !params.get('_sign') || !params.get('callback')) {
+      const detail = stringValue(login, 'description') || stringValue(login, 'desc') || stringValue(login, 'message')
+      const code = stringValue(login, 'code')
+      throw new Error(`小米登录未返回二维码参数${detail ? `：${detail}` : code ? `（code=${code}）` : ''}`)
+    }
     const second = await followRedirects(this.fetch, `${ACCOUNT_BASE}/longPolling/loginUrl?${params}`, { method: 'GET', headers: { 'User-Agent': userAgent(this.id) } }, this.cookies, 0)
     const qr = JSON.parse(stripJsonPrefix(second.text))
     if (Number(qr.code || 0) !== 0 || !qr.lp) throw new Error(`获取小米登录二维码失败${qr.desc ? `：${qr.desc}` : ''}`)
