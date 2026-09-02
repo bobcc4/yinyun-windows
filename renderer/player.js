@@ -3,7 +3,17 @@
 const api = window.yinyunClient
 const { createFavoriteIndex, favoriteTrackId, rawTrack, trackId, trackIdentityAliases } = window.yinyunTrackIdentity
 const { readLyricsContent, trackForLyrics } = window.yinyunLyrics
-const { conversationKey, normalizeXiaoaiVoiceText, parseXiaoaiVoiceCommand } = window.yinyunXiaoaiVoice
+const {
+  conversationKey,
+  normalizeXiaoaiVoiceText,
+  parseXiaoaiVoiceCommand,
+  createVoicePlaybackState,
+  beginVoiceInterruption,
+  markVoiceTaskFinished,
+  markVoiceCommand,
+  markVoiceResumeStarted,
+  observeVoicePlaybackStatus,
+} = window.yinyunXiaoaiVoice
 const byId = id => document.getElementById(id)
 const elements = {
   playlistNav: byId('playlist-nav'), createPlaylist: byId('create-playlist'),
@@ -34,10 +44,10 @@ const state = {
   queue: readQueue(), queueIndex: -1, current: null, searchSource: 'tx', searchType: 'song',
   loading: false, playMode: localStorage.getItem('yinyun-player-mode') || 'list', loveIndex: new Map(),
   libraries: { artists: [], albums: [] }, libraryTracks: [], libraryType: 'artists', boardSource: 'tx', boards: [],
-  resolving: false, toastTimer: null, downloads: new Map(), downloadHistory: readDownloadHistory(), boardId: null, entityDetail: null, entityDetailData: null, entityTab: 'songs', detailHistory: [], navigation: [], restoringNavigation: false,
+  resolving: false, playbackRequestId: 0, naturalAdvancePending: false, toastTimer: null, downloads: new Map(), downloadHistory: readDownloadHistory(), boardId: null, entityDetail: null, entityDetailData: null, entityTab: 'songs', detailHistory: [], navigation: [], restoringNavigation: false,
   trackSort: 'recent', librarySort: 'recent', artistFilter: 'all', selectionMode: false, selectedTracks: new Set(), playStats: readPlayStats(), albumReleaseDates: readAlbumReleaseDates(), albumReleasePromise: null,
   lyrics: [], activeLyricIndex: -1, lyricsRequestId: 0, playbackState: 'idle', playbackInfo: null,
-  output: 'local', xiaoai: { loggedIn: false, selectedDevice: null }, xiaoaiDevices: [], xiaoaiPollToken: 0, castStatusTimer: null, castProgressTimer: null, castVoiceTimer: null, castRecoveryTimer: null, castStatusReading: false, castVoiceReading: false, castVoiceReady: false, castVoiceSeenKeys: new Set(), castVoiceLastKey: '', castVoiceRecoveryNeeded: false, castUrl: '', castSourceUrl: '', castQueueSources: [], castRelayUrls: [], castTranscode: false, castGeneration: 0, castSeenPlaying: false, castPausedByUser: false, castPosition: 0, castPositionStartedAt: 0, castStreamOffset: 0, castSeeking: false, castIgnoreInactiveUntil: 0, castIgnoreRemoteTrackUntil: 0, castDeviceTrackKey: '', castRelayConnected: false, castRelayLostCount: 0, castInactiveCount: 0,
+  output: 'local', xiaoai: { loggedIn: false, selectedDevice: null }, xiaoaiDevices: [], xiaoaiPollToken: 0, castStatusTimer: null, castProgressTimer: null, castVoiceTimer: null, castStatusReading: false, castVoiceReading: false, castVoiceReady: false, castVoiceSeenKeys: new Set(), castVoicePlayback: createVoicePlaybackState(), castUrl: '', castSourceUrl: '', castQueueSources: [], castRelayUrls: [], castTranscode: false, castGeneration: 0, castSeenPlaying: false, castPausedByUser: false, castPosition: 0, castPositionStartedAt: 0, castStreamOffset: 0, castSeeking: false, castIgnoreInactiveUntil: 0, castIgnoreRemoteTrackUntil: 0, castDeviceTrackKey: '', castRelayConnected: false, castRelayLostCount: 0, castInactiveCount: 0,
 }
 
 function readQueue() {
@@ -548,22 +558,7 @@ function stopCastStatusPolling() {
   if (state.castStatusTimer) clearInterval(state.castStatusTimer)
   if (state.castProgressTimer) clearInterval(state.castProgressTimer)
   if (state.castVoiceTimer) clearInterval(state.castVoiceTimer)
-  if (state.castRecoveryTimer) clearTimeout(state.castRecoveryTimer)
-  state.castStatusTimer = null; state.castProgressTimer = null; state.castVoiceTimer = null; state.castRecoveryTimer = null; state.castStatusReading = false; state.castVoiceReading = false; state.castVoiceReady = false; state.castInactiveCount = 0
-}
-function scheduleCastVoiceRecovery(generation) {
-  if (state.castRecoveryTimer || state.castPausedByUser || state.output !== 'xiaoai') return
-  state.castRecoveryTimer = setTimeout(async () => {
-    state.castRecoveryTimer = null
-    if (state.output !== 'xiaoai' || generation !== state.castGeneration || state.castPausedByUser || !state.current) return
-    if (!state.castVoiceRecoveryNeeded) return
-    try {
-      await resumeCastPlayback()
-    } catch {
-      // A voice interaction may temporarily interrupt the speaker stream.
-      // The next status poll will retry without changing the selected track.
-    }
-  }, 4500)
+  state.castStatusTimer = null; state.castProgressTimer = null; state.castVoiceTimer = null; state.castStatusReading = false; state.castVoiceReading = false; state.castVoiceReady = false; state.castInactiveCount = 0; state.castVoicePlayback = createVoicePlaybackState()
 }
 function voiceRecordList(records) {
   return (Array.isArray(records) ? records : [])
@@ -607,11 +602,13 @@ async function searchVoiceTrack(query) {
 async function handleXiaoaiVoiceCommand(record, generation) {
   const command = parseXiaoaiVoiceCommand(record.query)
   if (command.action === 'ignore') {
-    scheduleCastVoiceRecovery(generation)
+    // The conversation record is written after XiaoAI has recognized the
+    // request. Keep waiting for the device to leave voice/TTS mode before
+    // resuming the music.
+    markVoiceTaskFinished(state.castVoicePlayback)
     return
   }
-  if (state.castRecoveryTimer) { clearTimeout(state.castRecoveryTimer); state.castRecoveryTimer = null }
-  state.castVoiceRecoveryNeeded = false
+  markVoiceCommand(state.castVoicePlayback, command.action)
   state.castPausedByUser = ['pause', 'stop'].includes(command.action)
   try {
     if (command.action === 'next') return nextTrack(true)
@@ -627,18 +624,17 @@ async function handleXiaoaiVoiceCommand(record, generation) {
     }
     if (command.action === 'play') {
       const track = await searchVoiceTrack(command.query)
-      if (!track) { state.castPausedByUser = false; scheduleCastVoiceRecovery(generation); showToast(`没有找到“${command.query}”的精确歌曲`, true); return }
+      if (!track) { state.castPausedByUser = false; markVoiceTaskFinished(state.castVoicePlayback); showToast(`没有找到“${command.query}”的精确歌曲`, true); return }
       state.queue = [track]; state.queueIndex = 0; saveQueue(); renderQueue(); renderTrackList(); await playAt(0, true)
     }
   } catch (error) {
     state.castPausedByUser = false
-    scheduleCastVoiceRecovery(generation)
+    markVoiceTaskFinished(state.castVoicePlayback)
     showToast(`语音操作失败：${errorMessage(error)}`, true)
   }
 }
 function startCastVoicePolling(generation) {
   state.castVoiceReady = false
-  state.castVoiceRecoveryNeeded = false
   state.castVoiceSeenKeys = new Set()
   const poll = async () => {
     if (state.output !== 'xiaoai' || generation !== state.castGeneration || state.castVoiceReading) return
@@ -768,6 +764,27 @@ function renderCastProgress() {
   const duration = durationSeconds(normalizeTrack(state.current).duration); const position = duration ? Math.min(duration, currentCastPosition()) : currentCastPosition()
   elements.elapsed.textContent = formatTime(position); elements.duration.textContent = formatTime(duration); elements.progress.value = duration ? String(Math.min(1000, Math.round(position / duration * 1000))) : '0'; syncLyrics(position)
 }
+async function resumeCastAfterVoice(generation) {
+  const voiceState = state.castVoicePlayback
+  if (generation !== state.castGeneration || state.castPausedByUser || voiceState.phase !== 'speaking' || !voiceState.resumePending) return
+  markVoiceResumeStarted(voiceState)
+  state.castPausedByUser = false
+  state.playbackState = 'paused'
+  renderPlaybackStatus()
+  try {
+    // Native resume keeps the current stream and position when the device
+    // supports it. A relay restart is only needed when the stream was closed.
+    await api.xiaoaiResume()
+  } catch {
+    voiceState.fallbackTried = true
+    await resumeCastPlayback()
+  }
+}
+async function restartCastAfterVoice(generation) {
+  if (generation !== state.castGeneration || state.castPausedByUser || state.castVoicePlayback.fallbackTried) return
+  state.castVoicePlayback.fallbackTried = true
+  try { await resumeCastPlayback() } catch (error) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus() }
+}
 function startCastStatusPolling(generation) {
   stopCastStatusPolling(); state.castStatusTimer = setInterval(async () => {
     if (state.output !== 'xiaoai' || generation !== state.castGeneration || !state.current || state.resolving || state.castStatusReading) return
@@ -776,6 +793,22 @@ function startCastStatusPolling(generation) {
       const status = await api.getXiaoaiStatus(); if (generation !== state.castGeneration) return
       const positionBeforeStatus = currentCastPosition()
       const statusAtEnd = castStatusAtEnd(status, positionBeforeStatus)
+      const voiceObservation = state.castPausedByUser
+        ? { phase: 'manual', blockNaturalAdvance: true }
+        : observeVoicePlaybackStatus(state.castVoicePlayback, status.status)
+      if (voiceObservation.speaking) {
+        if (state.playbackState === 'playing') { setCastPosition(currentCastPosition(), false); state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderCastProgress(); renderPlaybackStatus() }
+        return
+      }
+      if (voiceObservation.shouldResume) {
+        void resumeCastAfterVoice(generation)
+        return
+      }
+      if (voiceObservation.nativeResumePending) {
+        if (Date.now() - state.castVoicePlayback.resumeStartedAt >= 2500) void restartCastAfterVoice(generation)
+        return
+      }
+      if (voiceObservation.blockNaturalAdvance) return
       if (status.volume >= 0 && document.activeElement !== elements.volume) elements.volume.value = String(Math.round(status.volume))
       if (status.status === 0 && !state.castPausedByUser) state.castInactiveCount++
       else if (status.status !== 0 || state.castPausedByUser) state.castInactiveCount = 0
@@ -856,18 +889,8 @@ function startCastStatusPolling(generation) {
       }
       const acceptsInactiveStatus = Date.now() >= state.castIgnoreInactiveUntil
       if (status.status === 1 && !state.castPausedByUser) { state.castSeenPlaying = true; state.castIgnoreInactiveUntil = 0; if (state.playbackState !== 'playing') { state.playbackState = 'playing'; state.castPositionStartedAt = Date.now() } setButtonIcon(elements.playPause, 'pause'); renderPlaybackStatus() }
-      else if (status.status === 2 && state.castSeenPlaying && !state.castPausedByUser) {
-        // Voice wake-up and TTS can report paused for a short period. Wait for
-        // the conversation poll before changing the local playback state.
-        state.castVoiceRecoveryNeeded = true
-        scheduleCastVoiceRecovery(generation)
-      }
       else if (status.status === 0 && state.castSeenPlaying && acceptsInactiveStatus && !state.castPausedByUser) {
         if (state.castInactiveCount >= 2 && acceptsInactiveStatus && statusAtEnd) { state.castSeenPlaying = false; state.castInactiveCount = 0; nextTrack(false) }
-        else {
-          state.castVoiceRecoveryNeeded = true
-          scheduleCastVoiceRecovery(generation)
-        }
       }
     } catch { /* A temporary status read failure must not interrupt playback. */ }
     finally { state.castStatusReading = false }
@@ -897,14 +920,14 @@ function openCurrentArtist(anchor, event) {
   if (names.length === 1) return void searchArtist(names[0])
   elements.playlistMenu.replaceChildren(); names.forEach(name => { const button = document.createElement('button'); button.type = 'button'; button.append(icon('user-round'), name); button.addEventListener('click', () => { elements.playlistMenu.classList.add('hidden'); void searchArtist(name) }); elements.playlistMenu.append(button) }); const rect = anchor.getBoundingClientRect(); elements.playlistMenu.style.left = `${Math.min(rect.left, innerWidth - 220)}px`; elements.playlistMenu.style.top = `${Math.min(rect.bottom + 4, innerHeight - 280)}px`; elements.playlistMenu.classList.remove('hidden'); replaceIcons()
 }
-function playFromTracks(sourceTrack) { const index = state.tracks.indexOf(sourceTrack); state.queue = state.tracks.slice(); state.queueIndex = Math.max(0, index); saveQueue(); renderQueue(); void playAt(state.queueIndex) }
+function playFromTracks(sourceTrack) { const index = state.tracks.indexOf(sourceTrack); state.queue = state.tracks.slice(); state.queueIndex = Math.max(0, index); state.naturalAdvancePending = false; saveQueue(); renderQueue(); void playAt(state.queueIndex) }
 async function playAt(index, force = false) {
-  if (!state.queue.length || (state.resolving && !force)) return; const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length; state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; state.playbackState = 'resolving'; const cast = state.output === 'xiaoai'; const requestedQuality = cast ? '320k' : elements.quality.value; state.playbackInfo = { requestedSource: normalizeTrack(state.current).source, actualQuality: requestedQuality }; renderNowPlaying(); renderQueue(); renderTrackList()
-  try { const original = state.current; const originalTrack = normalizeTrack(original); const result = await api.resolveTrack({ track: original, quality: requestedQuality, preferOnline: false }); if (state.current !== state.queue[normalized]) return; const originalRaw = rawTrack(original); const originalSource = originalTrack.source; const actualSource = result.local ? (original.downloadSource || originalRaw.downloadSource || result.actualSource || originalSource) : (result.actualSource || originalSource); state.current = { ...original, quality: result.quality || original.quality, source: actualSource, raw: { ...originalRaw, ...(result.track?.raw || result.track || {}) } }; state.playbackInfo = { requestedSource: result.requestedSource || originalSource, actualSource, actualQuality: result.quality || original.quality || requestedQuality, sourceName: result.sourceName || '', local: Boolean(result.local), switched: !result.local && Boolean(originalSource && actualSource && platformLabel(originalSource) !== platformLabel(actualSource)) }; renderNowPlaying(); renderTrackList(); void loadLyrics(state.current)
-    if (cast) { elements.audio.pause(); elements.audio.removeAttribute('src'); await startCastPlayback(await buildCastSources(original, result), 0) }
-    else { elements.audio.src = result.url; await elements.audio.play(); state.playbackState = 'playing'; setButtonIcon(elements.playPause, 'pause') }
+  if (!state.queue.length || (state.resolving && !force)) return; const requestId = ++state.playbackRequestId; const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length; state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; state.playbackState = 'resolving'; const cast = state.output === 'xiaoai'; const requestedQuality = cast ? '320k' : elements.quality.value; state.playbackInfo = { requestedSource: normalizeTrack(state.current).source, actualQuality: requestedQuality }; renderNowPlaying(); renderQueue(); renderTrackList()
+  try { const original = state.current; const originalTrack = normalizeTrack(original); const result = await api.resolveTrack({ track: original, quality: requestedQuality, preferOnline: false }); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; const originalRaw = rawTrack(original); const originalSource = originalTrack.source; const actualSource = result.local ? (original.downloadSource || originalRaw.downloadSource || result.actualSource || originalSource) : (result.actualSource || originalSource); state.current = { ...original, quality: result.quality || original.quality, source: actualSource, raw: { ...originalRaw, ...(result.track?.raw || result.track || {}) } }; state.playbackInfo = { requestedSource: result.requestedSource || originalSource, actualSource, actualQuality: result.quality || original.quality || requestedQuality, sourceName: result.sourceName || '', local: Boolean(result.local), switched: !result.local && Boolean(originalSource && actualSource && platformLabel(originalSource) !== platformLabel(actualSource)) }; renderNowPlaying(); renderTrackList(); void loadLyrics(state.current)
+    if (cast) { elements.audio.pause(); elements.audio.removeAttribute('src'); await startCastPlayback(await buildCastSources(original, result), 0); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return }
+    else { if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.playbackSource = String(result.url || ''); elements.audio.src = result.url; await elements.audio.play(); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.naturalAdvancePending = false; state.playbackState = 'playing'; setButtonIcon(elements.playPause, 'pause') }
     const id = trackId(original); const previous = state.playStats[id] || {}; state.playStats[id] = { count: Number(previous.count || 0) + 1, lastPlayed: Date.now() }; savePlayStats(); renderPlaybackStatus()
-  } catch (error) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus(); showToast(`无法播放：${errorMessage(error)}`, true) } finally { state.resolving = false }
+  } catch (error) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus(); showToast(`无法播放：${errorMessage(error)}`, true) } finally { state.resolving = false; if (requestId === state.playbackRequestId) state.naturalAdvancePending = false }
 }
 async function buildCastSources(currentTrack, currentResult) {
   const current = normalizeTrack(currentTrack)
@@ -919,7 +942,14 @@ async function buildCastSources(currentTrack, currentResult) {
   }]
   return sources
 }
-function nextTrack(manual = false) { if (!state.queue.length) return; let next = state.queueIndex + 1; if (state.playMode === 'shuffle' && state.queue.length > 1) do next = Math.floor(Math.random() * state.queue.length); while (next === state.queueIndex); else if (!manual && state.playMode === 'one') next = state.queueIndex; void playAt(next, manual) }
+function nextTrack(manual = false) {
+  if (!state.queue.length || (!manual && state.naturalAdvancePending)) return
+  if (!manual) state.naturalAdvancePending = true
+  let next = state.queueIndex + 1
+  if (state.playMode === 'shuffle' && state.queue.length > 1) do next = Math.floor(Math.random() * state.queue.length); while (next === state.queueIndex)
+  else if (!manual && state.playMode === 'one') next = state.queueIndex
+  void playAt(next, manual)
+ }
 function previousTrack() { if (state.output === 'local' && elements.audio.currentTime > 4) { elements.audio.currentTime = 0; return } void playAt(state.queueIndex - 1) }
 async function stopCurrentTrack() {
   if (!state.current) return

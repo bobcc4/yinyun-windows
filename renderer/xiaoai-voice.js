@@ -24,7 +24,101 @@
     return String(record?.id || `${Number(record?.timestamp) || 0}:${normalize(record?.query)}`)
   }
 
-  const value = { conversationKey, normalizeXiaoaiVoiceText: normalize, parseXiaoaiVoiceCommand }
+  function createVoicePlaybackState() {
+    return {
+      phase: 'idle',
+      resumePending: false,
+      lastActivityAt: 0,
+      quietPolls: 0,
+      resumeStartedAt: 0,
+      fallbackTried: false,
+    }
+  }
+
+  function beginVoiceInterruption(state, now = Date.now()) {
+    if (state.phase === 'manual') return state
+    state.phase = 'speaking'
+    state.resumePending = true
+    state.lastActivityAt = now
+    state.quietPolls = 0
+    state.fallbackTried = false
+    return state
+  }
+
+  function markVoiceTaskFinished(state, now = Date.now()) {
+    if (state.phase === 'manual') return state
+    state.phase = 'speaking'
+    state.resumePending = true
+    state.lastActivityAt = now
+    state.quietPolls = 0
+    return state
+  }
+
+  function markVoiceCommand(state, action) {
+    if (action === 'pause' || action === 'stop') {
+      state.phase = 'manual'
+      state.resumePending = false
+      state.quietPolls = 0
+      return state
+    }
+    state.phase = 'command'
+    state.resumePending = false
+    state.quietPolls = 0
+    return state
+  }
+
+  function markVoiceResumeStarted(state, now = Date.now()) {
+    state.phase = 'resuming'
+    state.resumePending = false
+    state.resumeStartedAt = now
+    state.quietPolls = 0
+    return state
+  }
+
+  function observeVoicePlaybackStatus(state, status, now = Date.now()) {
+    const code = Number(status)
+    if (code === 2 && state.phase !== 'manual' && state.phase !== 'command') {
+      state.phase = 'speaking'
+      state.resumePending = true
+      state.lastActivityAt = now
+      state.quietPolls = 0
+      return { phase: state.phase, blockNaturalAdvance: true, speaking: true }
+    }
+    if (state.phase === 'idle' || state.phase === 'command' || state.phase === 'manual') {
+      return { phase: state.phase, blockNaturalAdvance: state.phase === 'manual' }
+    }
+    if (code === 1) {
+      state.phase = 'idle'
+      state.resumePending = false
+      state.quietPolls = 0
+      state.resumeStartedAt = 0
+      state.fallbackTried = false
+      return { phase: state.phase, playing: true }
+    }
+    if (code !== 0) return { phase: state.phase, blockNaturalAdvance: true }
+
+    if (state.phase === 'resuming') {
+      return { phase: state.phase, blockNaturalAdvance: true, nativeResumePending: true }
+    }
+    if (!state.resumePending) return { phase: state.phase, blockNaturalAdvance: true }
+
+    const quietEnough = now - state.lastActivityAt >= 1200
+    state.quietPolls = quietEnough ? state.quietPolls + 1 : 0
+    const shouldResume = state.quietPolls >= 2
+    return { phase: state.phase, blockNaturalAdvance: true, shouldResume }
+  }
+
+  const value = {
+    conversationKey,
+    normalizeXiaoaiVoiceText: normalize,
+    parseXiaoaiVoiceCommand,
+    createVoicePlaybackState,
+    beginVoiceInterruption,
+    markVoiceTaskFinished,
+    markVoiceCommand,
+    markVoiceResumeStarted,
+    observeVoicePlaybackStatus,
+  }
   if (typeof module !== 'undefined' && module.exports) module.exports = value
   global.yinyunXiaoaiVoice = value
 })(typeof window === 'undefined' ? globalThis : window)

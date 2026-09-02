@@ -3,7 +3,16 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { XiaoaiClient, XiaomiQrLogin, createXiaoaiManager, exchangeServiceToken, normalizeConversationRecord, normalizePlayDetail, parseUbusConversations, splitSetCookie, stripJsonPrefix } = require('../electron/xiaoai.cjs')
-const { parseXiaoaiVoiceCommand, normalizeXiaoaiVoiceText } = require('../renderer/xiaoai-voice.js')
+const {
+  parseXiaoaiVoiceCommand,
+  normalizeXiaoaiVoiceText,
+  createVoicePlaybackState,
+  beginVoiceInterruption,
+  markVoiceTaskFinished,
+  markVoiceCommand,
+  markVoiceResumeStarted,
+  observeVoicePlaybackStatus,
+} = require('../renderer/xiaoai-voice.js')
 
 function headers(values = {}) {
   return {
@@ -30,6 +39,32 @@ test('ignores the wake word and recognizes complete XiaoAI controls', () => {
   assert.deepEqual(parseXiaoaiVoiceCommand('请播放 夜曲'), { action: 'play', query: '夜曲' })
   assert.deepEqual(parseXiaoaiVoiceCommand('暂停播放'), { action: 'pause', query: '' })
   assert.equal(normalizeXiaoaiVoiceText('播放：夜曲！'), '播放夜曲')
+})
+
+test('waits for voice interaction to finish before resuming playback', () => {
+  const state = createVoicePlaybackState()
+  beginVoiceInterruption(state, 0)
+  assert.equal(observeVoicePlaybackStatus(state, 2, 100).speaking, true)
+  assert.equal(observeVoicePlaybackStatus(state, 0, 1000).shouldResume, false)
+  assert.equal(observeVoicePlaybackStatus(state, 0, 1400).shouldResume, false)
+  assert.equal(observeVoicePlaybackStatus(state, 0, 2400).shouldResume, true)
+  markVoiceResumeStarted(state, 2400)
+  assert.equal(observeVoicePlaybackStatus(state, 0, 3000).nativeResumePending, true)
+  assert.equal(observeVoicePlaybackStatus(state, 1, 3200).playing, true)
+})
+
+test('does not auto-resume after an explicit pause or stop command', () => {
+  const state = createVoicePlaybackState()
+  beginVoiceInterruption(state, 0)
+  markVoiceCommand(state, 'pause')
+  assert.notEqual(observeVoicePlaybackStatus(state, 0, 5000).shouldResume, true)
+  assert.equal(observeVoicePlaybackStatus(state, 0, 5000).blockNaturalAdvance, true)
+
+  const taskState = createVoicePlaybackState()
+  beginVoiceInterruption(taskState, 0)
+  markVoiceTaskFinished(taskState, 2000)
+  assert.equal(observeVoicePlaybackStatus(taskState, 0, 3200).shouldResume, false)
+  assert.equal(observeVoicePlaybackStatus(taskState, 0, 4400).shouldResume, true)
 })
 
 test('normalizes Xiaomi conversation records and UBus records', () => {
