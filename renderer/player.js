@@ -939,6 +939,8 @@ async function playAt(index, force = false) {
     const id = trackId(original); const previous = state.playStats[id] || {}; state.playStats[id] = { count: Number(previous.count || 0) + 1, lastPlayed: Date.now() }; savePlayStats(); renderPlaybackStatus()
   } catch (error) {
     if (requestId !== state.playbackRequestId) return
+    // 起播期间用户自己按了暂停会让 audio.play() 以 AbortError 失败，音源和进度都还在，保留以便续播
+    if (error && error.name === 'AbortError') { state.naturalAdvancePending = false; state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderPlaybackStatus(); return }
     state.naturalAdvancePending = false; state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus()
     if (!cast) abortAudioLoad()
     showToast(`无法播放：${errorMessage(error)}`, true)
@@ -1084,10 +1086,17 @@ elements.playAll.addEventListener('click', () => playCollection(false)); element
             renderPlaybackStatus()
           }
         } catch (error) {
-          if (error && error.code === 'AUDIO_START_CANCELLED') return
-          // 续播超时后必须中止仍挂起的加载，否则音频数据迟到后会自己出声
-          if (state.current) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; abortAudioLoad(); renderPlaybackStatus() }
-          showToast(errorMessage(error), true)
+          const code = error && error.code
+          if (code === 'AUDIO_START_CANCELLED') return
+          if (code === 'AUDIO_START_TIMEOUT') {
+            // 只有超时需要清理音源：音频数据可能迟到，不中止就会自己出声
+            if (state.current) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; abortAudioLoad(); renderPlaybackStatus() }
+            showToast(errorMessage(error), true)
+            return
+          }
+          // 其余失败（含缓冲期间点暂停抛出的 AbortError）保留音源和播放位置，直接再点播放即可续播
+          if (state.current) { state.playbackState = 'paused'; setButtonIcon(elements.playPause, 'play'); renderPlaybackStatus() }
+          if (!(error && error.name === 'AbortError')) showToast(errorMessage(error), true)
         }
       }
     } else {

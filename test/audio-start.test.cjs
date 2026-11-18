@@ -125,10 +125,27 @@ test('被抢占的请求不会把起播错误冒泡成播放失败', async () =>
   assert.equal(audio.soundOut, 1)
 })
 
-test('audio.play() 直接失败时把原始错误抛给调用方', async () => {
+test('audio.play() 直接失败时把原始错误抛给调用方，并保留音源便于重试', async () => {
   const audio = createFakeAudio()
+  audio.src = 'https://cdn.example.com/x.mp3'
   audio.play = () => Promise.reject(Object.assign(new Error('NotSupportedError'), { name: 'NotSupportedError' }))
   const starter = createAudioStarter(audio, { timeoutMs: 50 })
 
   await assert.rejects(starter.play(), (error) => error.name === 'NotSupportedError')
+  assert.equal(audio.src, 'https://cdn.example.com/x.mp3', '非超时失败不能清掉音源')
+  assert.equal(audio.loadCalls, 0, '非超时失败不应中止加载')
+})
+
+test('缓冲期间用户暂停（AbortError）不清空音源，可原地续播', async () => {
+  const audio = createFakeAudio({ delayMs: 40 })
+  const starter = createAudioStarter(audio, { timeoutMs: 1_000 })
+  audio.src = 'https://cdn.example.com/paused.mp3'
+  const play = starter.play()
+
+  await wait(5)
+  audio.pause()
+
+  await assert.rejects(play, (error) => error.name === 'AbortError')
+  assert.equal(audio.src, 'https://cdn.example.com/paused.mp3', '用户暂停后必须保留音源')
+  assert.equal(audio.paused, true)
 })
