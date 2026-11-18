@@ -3,6 +3,7 @@
 const api = window.yinyunClient
 const { createFavoriteIndex, favoriteTrackId, rawTrack, trackId, trackIdentityAliases } = window.yinyunTrackIdentity
 const { readLyricsContent, trackForLyrics } = window.yinyunLyrics
+const { createAudioStarter } = window.yinyunAudioStart
 const {
   conversationKey,
   normalizeXiaoaiVoiceText,
@@ -921,37 +922,25 @@ function openCurrentArtist(anchor, event) {
   elements.playlistMenu.replaceChildren(); names.forEach(name => { const button = document.createElement('button'); button.type = 'button'; button.append(icon('user-round'), name); button.addEventListener('click', () => { elements.playlistMenu.classList.add('hidden'); void searchArtist(name) }); elements.playlistMenu.append(button) }); const rect = anchor.getBoundingClientRect(); elements.playlistMenu.style.left = `${Math.min(rect.left, innerWidth - 220)}px`; elements.playlistMenu.style.top = `${Math.min(rect.bottom + 4, innerHeight - 280)}px`; elements.playlistMenu.classList.remove('hidden'); replaceIcons()
 }
 function playFromTracks(sourceTrack) { const index = state.tracks.indexOf(sourceTrack); state.queue = state.tracks.slice(); state.queueIndex = Math.max(0, index); state.naturalAdvancePending = false; saveQueue(); renderQueue(); void playAt(state.queueIndex) }
-const AUDIO_START_TIMEOUT_MS = 10_000
-function abortAudioLoad(audio) { try { audio.pause() } catch {} audio.removeAttribute('src'); try { audio.load() } catch {} }
-function playAudioWithTimeout(audio, timeoutMs = AUDIO_START_TIMEOUT_MS) {
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      const error = new Error('起播超时，音频地址长时间无响应')
-      error.code = 'AUDIO_START_TIMEOUT'
-      reject(error)
-    }, timeoutMs)
-    const finish = (handler, value) => { if (settled) return; settled = true; clearTimeout(timer); handler(value) }
-    audio.play().then(() => finish(resolve), error => finish(reject, error))
-  })
-}
+const audioStarter = createAudioStarter(elements.audio)
+function abortAudioLoad() { audioStarter.abortLoad() }
 async function playAt(index, force = false) {
   if (!state.queue.length) return
   const normalized = ((index % state.queue.length) + state.queue.length) % state.queue.length
   // 同一首歌在解析阶段被重复触发时做 1.5s 防抖；超出窗口的重复触发视为用户主动重试，允许抢占旧请求
   if (!force && state.resolving && state.queueIndex === normalized && state.playbackState === 'resolving' && Date.now() - (state.resolveStartedAt || 0) < 1500) return
+  // 抢占旧请求：旧音频还没真正起播时必须立刻中止加载。requestId 校验只能拦住状态回写，拦不住已经挂起的 audio.play()
+  if (state.playbackState !== 'playing') audioStarter.interrupt()
   const requestId = ++state.playbackRequestId; state.resolveStartedAt = Date.now(); state.queueIndex = normalized; state.current = state.queue[normalized]; state.resolving = true; state.playbackState = 'resolving'; const cast = state.output === 'xiaoai'; const requestedQuality = cast ? '320k' : elements.quality.value; state.playbackInfo = { requestedSource: normalizeTrack(state.current).source, actualQuality: requestedQuality }; renderNowPlaying(); renderQueue(); renderTrackList()
   try {
     const original = state.current; const originalTrack = normalizeTrack(original); const result = await api.resolveTrack({ track: original, quality: requestedQuality, preferOnline: false }); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; const originalRaw = rawTrack(original); const originalSource = originalTrack.source; const actualSource = result.local ? (original.downloadSource || originalRaw.downloadSource || result.actualSource || originalSource) : (result.actualSource || originalSource); state.current = { ...original, quality: result.quality || original.quality, source: actualSource, raw: { ...originalRaw, ...(result.track?.raw || result.track || {}) } }; state.playbackInfo = { requestedSource: result.requestedSource || originalSource, actualSource, actualQuality: result.quality || original.quality || requestedQuality, sourceName: result.sourceName || '', local: Boolean(result.local), switched: !result.local && Boolean(originalSource && actualSource && platformLabel(originalSource) !== platformLabel(actualSource)) }; renderNowPlaying(); renderTrackList(); void loadLyrics(state.current)
     if (cast) { elements.audio.pause(); elements.audio.removeAttribute('src'); await startCastPlayback(await buildCastSources(original, result), 0); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return }
-    else { if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.playbackSource = String(result.url || ''); state.playbackState = 'buffering'; renderPlaybackStatus(); elements.audio.src = result.url; await playAudioWithTimeout(elements.audio); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.naturalAdvancePending = false; state.playbackState = 'playing'; setButtonIcon(elements.playPause, 'pause') }
+    else { if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.playbackSource = String(result.url || ''); state.playbackState = 'buffering'; renderPlaybackStatus(); elements.audio.src = result.url; await audioStarter.play(); if (requestId !== state.playbackRequestId || state.current !== state.queue[normalized]) return; state.naturalAdvancePending = false; state.playbackState = 'playing'; setButtonIcon(elements.playPause, 'pause') }
     const id = trackId(original); const previous = state.playStats[id] || {}; state.playStats[id] = { count: Number(previous.count || 0) + 1, lastPlayed: Date.now() }; savePlayStats(); renderPlaybackStatus()
   } catch (error) {
     if (requestId !== state.playbackRequestId) return
     state.naturalAdvancePending = false; state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; renderPlaybackStatus()
-    if (!cast) abortAudioLoad(elements.audio)
+    if (!cast) abortAudioLoad()
     showToast(`无法播放：${errorMessage(error)}`, true)
   } finally {
     if (requestId === state.playbackRequestId) state.resolving = false
@@ -1083,14 +1072,24 @@ elements.playAll.addEventListener('click', () => playCollection(false)); element
   if (!state.current && state.queue.length) return void playAt(Math.max(0, state.queueIndex)); if (!state.current && state.tracks.length) return playFromTracks(state.tracks[0])
   if (state.output === 'local') {
     if (elements.audio.paused) {
-      try {
-        await playAudioWithTimeout(elements.audio)
-        if (state.current && state.output === 'local' && !elements.audio.paused) {
-          state.playbackState = 'playing'
-          setButtonIcon(elements.playPause, 'pause')
-          renderPlaybackStatus()
+      // 起播失败或超时后音源已被清理，此时重新解析地址再播，而不是对空音源调用 play()
+      if (!elements.audio.getAttribute('src')) {
+        if (state.current) await playAt(state.queueIndex, true)
+      } else {
+        try {
+          await audioStarter.play()
+          if (state.current && state.output === 'local' && !elements.audio.paused) {
+            state.playbackState = 'playing'
+            setButtonIcon(elements.playPause, 'pause')
+            renderPlaybackStatus()
+          }
+        } catch (error) {
+          if (error && error.code === 'AUDIO_START_CANCELLED') return
+          // 续播超时后必须中止仍挂起的加载，否则音频数据迟到后会自己出声
+          if (state.current) { state.playbackState = 'error'; state.playbackInfo = { ...state.playbackInfo, error: errorMessage(error) }; abortAudioLoad(); renderPlaybackStatus() }
+          showToast(errorMessage(error), true)
         }
-      } catch (error) { showToast(errorMessage(error), true) }
+      }
     } else {
       elements.audio.pause()
       if (state.current) {
